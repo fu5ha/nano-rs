@@ -1,0 +1,11 @@
+[package]
+name = "nano-node-rs"
+version = "0.1.0"
+authors = ["Gray Olson <gray@grayolson.com>"]
+
+[dependencies]
+tokio = "0.1"
+tokio-io = "0.1"
+futures = "0.1"
+error-chain = "0.11"
+nano-lib = {path = "./nano-lib"}

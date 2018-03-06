@@ -1,0 +1,10 @@
+[package]
+name = "nano-lib"
+version = "0.1.0"
+authors = ["Gray Olson <gray@grayolson.com>"]
+
+[dependencies]
+log = "0.4"
+error-chain = "0.11"
+bytes = "0.4"
+blake2 = "0.7"
