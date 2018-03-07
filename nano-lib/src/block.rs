@@ -1,11 +1,18 @@
-use bytes::{Bytes};
-use blake2::{Blake2b, Digest};
+extern crate nanopow_rs;
+use::nanopow_rs::{Work, generate_work, check_work};
 
-use super::hash::{Hash, Hasher}
-use super::keys::{PublicKey, PrivateKey, Account};
+// use bytes::{Bytes};
+use blake2::Blake2b;
+use blake2::digest::{Input, VariableOutput};
+
+use super::hash::{Hash, Hasher};
+use super::keys::{PublicKey, PrivateKey};
 use super::error::*;
 
-pub enum BlockType {
+use hex::{FromHex, ToHex};
+
+#[derive(Clone, Copy)]
+pub enum BlockKind {
     Invalid,
     NotABlock,
     Send,
@@ -15,35 +22,159 @@ pub enum BlockType {
     Universal
 }
 
-pub type BlockHash([u8; 32]);
-pub type Work([u8; 8]);
+#[derive(Clone, Copy)]
+pub struct BlockHash([u8; 32]);
+
+impl BlockHash
+{
+    /// Convert hexadecimal formatted data into a BlockHash
+    pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
+        if s.as_ref().len() / 2 != 32 {
+            bail!(ErrorKind::BlockHashLengthError);
+        }
+        let bytes = Vec::from_hex(s)?;
+        if bytes.len() != 32 {
+            bail!(ErrorKind::BlockHashLengthError);
+        }
+        let mut buf = [0u8; 32];
+        for i in 0..32 {
+            buf[i] = bytes[i];
+        }
+        Ok(BlockHash(buf))
+    }
+
+    /// Create a BlockHash from a raw byte slice
+    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self> {
+        let bytes = bytes.as_ref();
+        if bytes.len() != 32 {
+            bail!(ErrorKind::BlockHashLengthError);
+        }
+        let mut buf = [0u8; 32];
+        for i in 0..32 {
+            buf[i] = bytes[i];
+        }
+        Ok(BlockHash(buf))
+    }
+}
+
+impl Hash for BlockHash {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&self.0[..])
+    }
+}
+
+impl AsRef<[u8]> for BlockHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<BlockHash> for String {
+    fn from(hash: BlockHash) -> Self {
+        let mut string = String::with_capacity(64);
+        hash.write_hex_upper(&mut string).unwrap();
+        string
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Signature([u8; 32]);
+
+impl Signature
+{
+    /// Convert hexadecimal formatted data into an InputHash
+    pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
+        if s.as_ref().len() / 2 != 32 {
+            bail!(ErrorKind::SignatureLengthError);
+        }
+        let bytes = Vec::from_hex(s)?;
+        if bytes.len() != 32 {
+            bail!(ErrorKind::SignatureLengthError);
+        }
+        let mut buf = [0u8; 32];
+        for i in 0..32 {
+            buf[i] = bytes[i];
+        }
+        Ok(Signature(buf))
+    }
+
+    /// Create an InputHash from a raw byte slice
+    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self> {
+        let bytes = bytes.as_ref();
+        if bytes.len() != 32 {
+            bail!(ErrorKind::SignatureLengthError);
+        }
+        let mut buf = [0u8; 32];
+        for i in 0..32 {
+            buf[i] = bytes[i];
+        }
+        Ok(Signature(buf))
+    }
+}
+
+impl AsRef<[u8]> for Signature {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Signature> for String {
+    fn from(sig: Signature) -> Self {
+        let mut string = String::with_capacity(64);
+        sig.write_hex_upper(&mut string).unwrap();
+        string
+    }
+}
 
 pub trait Block {
-    pub fn type(&self) -> BlockType;
-    pub fn prevoius(&self) -> BlockHash;
-    pub fn serialize(&self) -> Bytes;
-    pub fn is_signed(&self) -> bool;
-    pub fn has_work(&self) -> 
+    fn kind(&self) -> BlockKind;
+    fn previous(&self) -> Option<BlockHash>;
+    fn next(&self) -> Option<BlockHash>;
+    fn signature(&self) -> Option<Signature>;
+    fn is_signed(&self) -> bool {
+        self.signature().is_some()
+    }
+    fn sign(&mut self, key: &PrivateKey) -> Result<()>;
+    fn work(&self) -> Option<Work>;
+    fn set_work(&mut self, work: Work) -> Result<()>;
+    fn generate_work(&mut self);
+    fn check_work(&self, work: &Work) -> bool;
+    fn has_work(&self) -> bool {
+        self.work().is_some()
+    }
+    fn cached_hash(&self) -> Option<BlockHash>;
+    fn calculate_hash(&mut self) -> BlockHash;
+    fn hash(&mut self, force: bool) -> BlockHash {
+        if !force {
+            let cached_hash = self.cached_hash();
+            if let Some(hash) = cached_hash {
+                return hash;
+            }
+        }
+        self.calculate_hash()
+    }
 }
 
 pub struct BlockHasher {
-    blake: u64
+    blake: Blake2b
 }
 
 impl BlockHasher {
     pub fn new() -> Self {
-        blake: Blake2b::new(32)
+        BlockHasher {
+            blake: Blake2b::new(32).unwrap()
+        }
     }
 }
 
 impl Hasher for BlockHasher {
     type Output = BlockHash;
     fn write(&mut self, bytes: &[u8]) {
-        self.blake.input(bytes);
+        self.blake.process(bytes);
     }
 
-    fn finish(&self) -> Output {
-        let mut buf = [u8; 32];
+    fn finish(self) -> BlockHash {
+        let mut buf = [0u8; 32];
         self.blake.variable_result(&mut buf);
         BlockHash(buf)
     }
@@ -53,16 +184,7 @@ pub struct RawOpenBlock {
     source: BlockHash,
     representative: PublicKey,
     account: PublicKey,
-}
-
-impl RawOpenBlock {
-    pub fn from_bytes(bytes: Bytes) -> Result<Self>  {
-        Ok(OpenBlock {
-            source: BlockHash([0u8; 32]),
-            representative: PublicKey([0u8; 32]),
-            account: PublicKey([0u8; 32]),
-        })
-    }
+    next: Option<BlockHash>,
 }
 
 impl Hash for RawOpenBlock {
@@ -74,13 +196,53 @@ impl Hash for RawOpenBlock {
 }
 
 pub struct OpenBlock {
-    raw: RawOpenBlock,
+    inner: RawOpenBlock,
     work: Option<Work>,
     signature: Option<Signature>,
+    hash: Option<BlockHash>
 }
 
 impl Block for OpenBlock {
-    fn type(&self) -> BlockType {
-        BlockType::Open
+    fn kind(&self) -> BlockKind {
+        BlockKind::Open
+    }
+    fn previous(&self) -> Option<BlockHash> {
+        None
+    }
+    fn next(&self) -> Option<BlockHash> {
+        self.inner.next
+    }
+    fn signature(&self) -> Option<Signature> {
+        self.signature
+    }
+    fn sign(&mut self, key: &PrivateKey) -> Result<()> {
+        unimplemented!();
+    }
+    fn work(&self) -> Option<Work> {
+        self.work.clone()
+    }
+    fn set_work(&mut self, work: Work) -> Result<()> {
+        if !self.check_work(&work) {
+            bail!(ErrorKind::InvalidWorkError);
+        }
+        self.work = Some(work);
+        Ok(())
+    }
+    fn generate_work(&mut self) {
+        let work = generate_work(&self.inner.account.clone().into(), None);
+        self.work = work;
+    }
+    fn check_work(&self, work: &Work) -> bool {
+        check_work(&self.inner.account.clone().into(), work)
+    }
+    fn cached_hash(&self) -> Option<BlockHash> {
+        self.hash
+    }
+    fn calculate_hash(&mut self) -> BlockHash {
+        let mut hasher = BlockHasher::new();
+        self.inner.hash(&mut hasher);
+        let hash = hasher.finish();
+        self.hash = Some(hash);
+        hash
     }
 }

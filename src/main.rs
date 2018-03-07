@@ -5,7 +5,7 @@ extern crate tokio_io;
 #[macro_use]
 extern crate error_chain;
 
-mod errors;
+mod error;
 
 fn main() {
     println!("Hello, world!");
