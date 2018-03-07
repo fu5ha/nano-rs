@@ -8,7 +8,7 @@ pub struct PrivateKey([u8; 32]);
 pub struct PublicKey([u8; 32]);
 
 impl From<PrivateKey> for PublicKey {
-  fn from(key: PrivateKey) -> Self {
+  fn from(_key: PrivateKey) -> Self {
     unimplemented!();
   }
 }
@@ -28,7 +28,7 @@ impl Hash for PublicKey {
 pub struct Address(pub String);
 
 impl From<PublicKey> for Address {
-  fn from(key: PublicKey) -> Self {
+  fn from(_key: PublicKey) -> Self {
     unimplemented!();
   }
 }

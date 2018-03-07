@@ -1,4 +1,5 @@
 #![recursion_limit = "1024"]
+#![feature(i128_type)]
 #[macro_use]
 extern crate error_chain;
 

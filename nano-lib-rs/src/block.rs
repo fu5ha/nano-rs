@@ -1,5 +1,5 @@
 extern crate nanopow_rs;
-use::nanopow_rs::{Work, generate_work, check_work};
+use::nanopow_rs::{Work, InputHash, generate_work, check_work};
 
 // use bytes::{Bytes};
 use blake2::Blake2b;
@@ -15,11 +15,11 @@ use hex::{FromHex, ToHex};
 pub enum BlockKind {
     Invalid = 0x00,
     NotABlock = 0x01,
-    Send = 0x02,
-    Receive = 0x03,
-    Open = 0x04,
-    Change = 0x05,
-    Universal = 0x06 // not implemented
+    SendBlock = 0x02,
+    ReceiveBlock = 0x03,
+    OpenBlock = 0x04,
+    ChangeBlock = 0x05,
+    UniversalBlock = 0x06 // not implemented
 }
 
 impl BlockKind {
@@ -27,11 +27,11 @@ impl BlockKind {
         match *self {
             BlockKind::Invalid => 0,
             BlockKind::NotABlock => 0,
-            BlockKind::Send => 80,
-            BlockKind::Receive => 64,
-            BlockKind::Open => 96,
-            BlockKind::Change => 32,
-            BlockKind::Universal => 0 // not implemented
+            BlockKind::SendBlock => 80,
+            BlockKind::ReceiveBlock => 64,
+            BlockKind::OpenBlock => 96,
+            BlockKind::ChangeBlock => 32,
+            BlockKind::UniversalBlock => 0 // not implemented
         }
     }
 }
@@ -88,6 +88,12 @@ impl From<BlockHash> for String {
         let mut string = String::with_capacity(64);
         hash.write_hex_upper(&mut string).unwrap();
         string
+    }
+}
+
+impl From<BlockHash> for InputHash {
+    fn from(hash: BlockHash) -> Self {
+        InputHash::new(hash.0)
     }
 }
 
@@ -194,6 +200,32 @@ impl Hasher for BlockHasher {
     }
 }
 
+pub struct RawSendBlock {
+    previous: BlockHash,
+    destination: BlockHash,
+    balance: u128,
+}
+
+impl Hash for RawSendBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.previous.hash(state);
+        self.destination.hash(state);
+        self.balance.hash(state);
+    }
+}
+
+pub struct RawReceiveBlock {
+    previous: BlockHash,
+    source: BlockHash,
+}
+
+impl Hash for RawReceiveBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.previous.hash(state);
+        self.source.hash(state);
+    }
+}
+
 pub struct RawOpenBlock {
     source: BlockHash,
     representative: PublicKey,
@@ -208,55 +240,89 @@ impl Hash for RawOpenBlock {
     }
 }
 
-pub struct OpenBlock {
-    inner: RawOpenBlock,
-    next: Option<BlockHash>,
-    work: Option<Work>,
-    signature: Option<Signature>,
-    hash: Option<BlockHash>
+pub struct RawChangeBlock {
+    previous: BlockHash,
+    representative: BlockHash,
 }
 
-impl Block for OpenBlock {
-    fn kind(&self) -> BlockKind {
-        BlockKind::Open
+impl Hash for RawChangeBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.previous.hash(state);
+        self.representative.hash(state);
     }
-    fn previous(&self) -> Option<BlockHash> {
-        None
-    }
-    fn next(&self) -> Option<BlockHash> {
-        self.next
-    }
-    fn signature(&self) -> Option<Signature> {
-        self.signature
-    }
-    fn sign(&mut self, key: &PrivateKey) -> Result<()> {
-        unimplemented!();
-    }
-    fn work(&self) -> Option<Work> {
-        self.work.clone()
-    }
-    fn set_work(&mut self, work: Work) -> Result<()> {
-        if !self.check_work(&work) {
-            bail!(ErrorKind::InvalidWorkError);
+}
+
+macro_rules! create_block {
+    ( $( $block_name:ident: $raw_block_type:ty),+ ) => {$(
+        pub struct $block_name {
+            inner: $raw_block_type,
+            next: Option<BlockHash>,
+            work: Option<Work>,
+            signature: Option<Signature>,
+            hash: Option<BlockHash>
         }
-        self.work = Some(work);
-        Ok(())
-    }
-    fn generate_work(&mut self) {
-        let work = generate_work(&self.inner.account.clone().into(), None);
-        self.work = work;
-    }
-    fn check_work(&self, work: &Work) -> bool {
-        check_work(&self.inner.account.clone().into(), work)
-    }
-    fn cached_hash(&self) -> Option<BlockHash> {
-        self.hash
-    }
-    fn calculate_hash(&mut self) -> Result<BlockHash> {
-        let mut hasher = BlockHasher::new();
-        self.inner.hash(&mut hasher);
-        let hash = hasher.finish()?;
-        self.hash = Some(hash);
-        Ok(hash)
-    }
+    )*}
+}
+
+create_block! {
+    SendBlock: RawSendBlock,
+    ReceiveBlock: RawReceiveBlock,
+    OpenBlock: RawOpenBlock,
+    ChangeBlock: RawChangeBlock
+}
+
+macro_rules! impl_block {
+    ( $( $block_name:ident: $work_source:ident ),+ ) => {$(
+        impl Block for $block_name {
+            fn kind(&self) -> BlockKind {
+                BlockKind::$block_name
+            }
+            fn previous(&self) -> Option<BlockHash> {
+                None
+            }
+            fn next(&self) -> Option<BlockHash> {
+                self.next
+            }
+            fn signature(&self) -> Option<Signature> {
+                self.signature
+            }
+            fn sign(&mut self, _key: &PrivateKey) -> Result<()> {
+                unimplemented!();
+            }
+            fn work(&self) -> Option<Work> {
+                self.work.clone()
+            }
+            fn set_work(&mut self, work: Work) -> Result<()> {
+                if !self.check_work(&work) {
+                    bail!(ErrorKind::InvalidWorkError);
+                }
+                self.work = Some(work);
+                Ok(())
+            }
+            fn generate_work(&mut self) {
+                let work = generate_work(&self.inner.$work_source.clone().into(), None);
+                self.work = work;
+            }
+            fn check_work(&self, work: &Work) -> bool {
+                check_work(&self.inner.$work_source.clone().into(), work)
+            }
+            fn cached_hash(&self) -> Option<BlockHash> {
+                self.hash
+            }
+            fn calculate_hash(&mut self) -> Result<BlockHash> {
+                let mut hasher = BlockHasher::new();
+                self.inner.hash(&mut hasher);
+                let hash = hasher.finish()?;
+                self.hash = Some(hash);
+                Ok(hash)
+            }
+        }
+    )*}
+}
+
+impl_block! {
+    SendBlock: previous,
+    ReceiveBlock: previous,
+    OpenBlock: account,
+    ChangeBlock: previous
 }
