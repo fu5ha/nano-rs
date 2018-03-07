@@ -13,13 +13,27 @@ use hex::{FromHex, ToHex};
 
 #[derive(Clone, Copy)]
 pub enum BlockKind {
-    Invalid,
-    NotABlock,
-    Send,
-    Receive,
-    Open,
-    Change,
-    Universal
+    Invalid = 0x00,
+    NotABlock = 0x01,
+    Send = 0x02,
+    Receive = 0x03,
+    Open = 0x04,
+    Change = 0x05,
+    Universal = 0x06 // not implemented
+}
+
+impl BlockKind {
+    pub fn size(&self) -> usize {
+        match *self {
+            BlockKind::Invalid => 0,
+            BlockKind::NotABlock => 0,
+            BlockKind::Send => 80,
+            BlockKind::Receive => 64,
+            BlockKind::Open => 96,
+            BlockKind::Change => 32,
+            BlockKind::Universal => 0 // not implemented
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -143,12 +157,12 @@ pub trait Block {
         self.work().is_some()
     }
     fn cached_hash(&self) -> Option<BlockHash>;
-    fn calculate_hash(&mut self) -> BlockHash;
-    fn hash(&mut self, force: bool) -> BlockHash {
+    fn calculate_hash(&mut self) -> Result<BlockHash>;
+    fn hash(&mut self, force: bool) -> Result<BlockHash> {
         if !force {
             let cached_hash = self.cached_hash();
             if let Some(hash) = cached_hash {
-                return hash;
+                return Ok(hash)
             }
         }
         self.calculate_hash()
@@ -173,10 +187,10 @@ impl Hasher for BlockHasher {
         self.blake.process(bytes);
     }
 
-    fn finish(self) -> BlockHash {
+    fn finish(self) -> Result<BlockHash> {
         let mut buf = [0u8; 32];
-        self.blake.variable_result(&mut buf);
-        BlockHash(buf)
+        self.blake.variable_result(&mut buf).map_err(|_| "Invalid key length")?;
+        Ok(BlockHash(buf))
     }
 }
 
@@ -184,7 +198,6 @@ pub struct RawOpenBlock {
     source: BlockHash,
     representative: PublicKey,
     account: PublicKey,
-    next: Option<BlockHash>,
 }
 
 impl Hash for RawOpenBlock {
@@ -197,6 +210,7 @@ impl Hash for RawOpenBlock {
 
 pub struct OpenBlock {
     inner: RawOpenBlock,
+    next: Option<BlockHash>,
     work: Option<Work>,
     signature: Option<Signature>,
     hash: Option<BlockHash>
@@ -210,7 +224,7 @@ impl Block for OpenBlock {
         None
     }
     fn next(&self) -> Option<BlockHash> {
-        self.inner.next
+        self.next
     }
     fn signature(&self) -> Option<Signature> {
         self.signature
@@ -238,11 +252,11 @@ impl Block for OpenBlock {
     fn cached_hash(&self) -> Option<BlockHash> {
         self.hash
     }
-    fn calculate_hash(&mut self) -> BlockHash {
+    fn calculate_hash(&mut self) -> Result<BlockHash> {
         let mut hasher = BlockHasher::new();
         self.inner.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hash = hasher.finish()?;
         self.hash = Some(hash);
-        hash
+        Ok(hash)
     }
 }

@@ -1,8 +1,10 @@
+use super::error::Result;
+
 pub trait Hasher {
     type Output;
-
+   
     fn write(&mut self, bytes: &[u8]);
-    fn finish(self) -> Self::Output;
+    fn finish(self) -> Result<Self::Output>;
 }
 
 pub trait Hash {
