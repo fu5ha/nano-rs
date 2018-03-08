@@ -9,17 +9,18 @@ use super::hash::{Hash, Hasher};
 use super::keys::{PublicKey, PrivateKey};
 use super::error::*;
 
-use hex::{FromHex, ToHex};
+use data_encoding::{HEXUPPER};
 
 #[derive(Clone, Copy)]
+#[repr(u8)]
 pub enum BlockKind {
-    Invalid = 0x00,
-    NotABlock = 0x01,
-    SendBlock = 0x02,
-    ReceiveBlock = 0x03,
-    OpenBlock = 0x04,
-    ChangeBlock = 0x05,
-    UniversalBlock = 0x06 // not implemented
+    Invalid,
+    NotABlock,
+    SendBlock,
+    ReceiveBlock,
+    OpenBlock,
+    ChangeBlock,
+    UniversalBlock, // not implemented
 }
 
 impl BlockKind {
@@ -43,17 +44,13 @@ impl BlockHash
 {
     /// Convert hexadecimal formatted data into a BlockHash
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
-        if s.as_ref().len() / 2 != 32 {
-            bail!(ErrorKind::BlockHashLengthError);
-        }
-        let bytes = Vec::from_hex(s)?;
-        if bytes.len() != 32 {
+        let bytes = s.as_ref();
+        if bytes.len() != 64 {
             bail!(ErrorKind::BlockHashLengthError);
         }
         let mut buf = [0u8; 32];
-        for i in 0..32 {
-            buf[i] = bytes[i];
-        }
+        let _ = HEXUPPER.decode_mut(bytes, &mut buf)
+            .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
         Ok(BlockHash(buf))
     }
 
@@ -85,8 +82,7 @@ impl AsRef<[u8]> for BlockHash {
 
 impl From<BlockHash> for String {
     fn from(hash: BlockHash) -> Self {
-        let mut string = String::with_capacity(64);
-        hash.write_hex_upper(&mut string).unwrap();
+        let string = HEXUPPER.encode(&hash.0);
         string
     }
 }
@@ -104,17 +100,13 @@ impl Signature
 {
     /// Convert hexadecimal formatted data into an InputHash
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
-        if s.as_ref().len() / 2 != 32 {
-            bail!(ErrorKind::SignatureLengthError);
-        }
-        let bytes = Vec::from_hex(s)?;
-        if bytes.len() != 32 {
-            bail!(ErrorKind::SignatureLengthError);
+        let bytes = s.as_ref();
+        if bytes.len() != 64 {
+            bail!(ErrorKind::BlockHashLengthError);
         }
         let mut buf = [0u8; 32];
-        for i in 0..32 {
-            buf[i] = bytes[i];
-        }
+        let _ = HEXUPPER.decode_mut(bytes, &mut buf)
+            .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
         Ok(Signature(buf))
     }
 
@@ -140,8 +132,7 @@ impl AsRef<[u8]> for Signature {
 
 impl From<Signature> for String {
     fn from(sig: Signature) -> Self {
-        let mut string = String::with_capacity(64);
-        sig.write_hex_upper(&mut string).unwrap();
+        let string = HEXUPPER.encode(&sig.0);
         string
     }
 }

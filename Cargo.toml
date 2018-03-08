@@ -9,4 +9,6 @@ tokio = "0.1"
 tokio-io = "0.1"
 futures = "0.1"
 error-chain = "0.11"
-nano-lib = {path = "./nano-lib"}
+nano-lib-rs = {path = "./nano-lib-rs"}
+slog = "2.1"
+sloggers = "0.2"

@@ -1,8 +1,12 @@
 use nanopow_rs;
-use hex;
 
 error_chain!{
     errors {
+        /// Invalid character used in hex string
+        InvalidHexCharacterError(pos: usize) {
+        description("invalid character in hex")
+        display("Invalid character in hex string at position {}", pos)
+        }
         /// Attempted to set invalid work for a block
         InvalidWorkError {
             description("invalid work")
@@ -25,7 +29,6 @@ error_chain!{
     }
 
     foreign_links {
-        FromHexConversionError(hex::FromHexError) #[doc = "An error occurred while converting from hex"];
         FormatError(::std::fmt::Error) #[doc = "A formatting error occured"];
     }
 }
