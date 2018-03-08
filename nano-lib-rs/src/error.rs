@@ -1,5 +1,3 @@
-use nanopow_rs;
-
 error_chain!{
     errors {
         /// Invalid character used in hex string
@@ -25,10 +23,11 @@ error_chain!{
     }
 
     links {
-        NanopowError(nanopow_rs::error::Error, nanopow_rs::error::ErrorKind) #[doc = "An error occurred while generating Proof of Work."];
+        NanopowError(::nanopow_rs::error::Error, ::nanopow_rs::error::ErrorKind) #[doc = "An error occurred while generating Proof of Work."];
     }
 
     foreign_links {
         FormatError(::std::fmt::Error) #[doc = "A formatting error occured"];
+        BincodeError(::bincode::Error) #[doc = "An error occurred while serializing/deserializing binary data."];
     }
 }

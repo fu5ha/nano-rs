@@ -1,15 +1,15 @@
 extern crate nanopow_rs;
-use::nanopow_rs::{Work, InputHash, generate_work, check_work};
+use nanopow_rs::{check_work, generate_work, InputHash, Work};
 
 // use bytes::{Bytes};
 use blake2::Blake2b;
 use blake2::digest::{Input, VariableOutput};
 
-use super::hash::{Hash, Hasher};
-use super::keys::{PublicKey, PrivateKey};
-use super::error::*;
+use hash::{Hash, Hasher};
+use keys::{PrivateKey, PublicKey};
+use error::*;
 
-use data_encoding::{HEXUPPER};
+use data_encoding::HEXUPPER;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -32,7 +32,7 @@ impl BlockKind {
             BlockKind::ReceiveBlock => 64,
             BlockKind::OpenBlock => 96,
             BlockKind::ChangeBlock => 32,
-            BlockKind::UniversalBlock => 0 // not implemented
+            BlockKind::UniversalBlock => 0, // not implemented
         }
     }
 }
@@ -40,8 +40,7 @@ impl BlockKind {
 #[derive(Clone, Copy)]
 pub struct BlockHash([u8; 32]);
 
-impl BlockHash
-{
+impl BlockHash {
     /// Convert hexadecimal formatted data into a BlockHash
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
         let bytes = s.as_ref();
@@ -49,7 +48,8 @@ impl BlockHash
             bail!(ErrorKind::BlockHashLengthError);
         }
         let mut buf = [0u8; 32];
-        let _ = HEXUPPER.decode_mut(bytes, &mut buf)
+        let _ = HEXUPPER
+            .decode_mut(bytes, &mut buf)
             .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
         Ok(BlockHash(buf))
     }
@@ -96,8 +96,7 @@ impl From<BlockHash> for InputHash {
 #[derive(Clone, Copy)]
 pub struct Signature([u8; 32]);
 
-impl Signature
-{
+impl Signature {
     /// Convert hexadecimal formatted data into an InputHash
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
         let bytes = s.as_ref();
@@ -105,7 +104,8 @@ impl Signature
             bail!(ErrorKind::BlockHashLengthError);
         }
         let mut buf = [0u8; 32];
-        let _ = HEXUPPER.decode_mut(bytes, &mut buf)
+        let _ = HEXUPPER
+            .decode_mut(bytes, &mut buf)
             .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
         Ok(Signature(buf))
     }
@@ -159,7 +159,7 @@ pub trait Block {
         if !force {
             let cached_hash = self.cached_hash();
             if let Some(hash) = cached_hash {
-                return Ok(hash)
+                return Ok(hash);
             }
         }
         self.calculate_hash()
@@ -167,13 +167,13 @@ pub trait Block {
 }
 
 pub struct BlockHasher {
-    blake: Blake2b
+    blake: Blake2b,
 }
 
 impl BlockHasher {
     pub fn new() -> Self {
         BlockHasher {
-            blake: Blake2b::new(32).unwrap()
+            blake: Blake2b::new(32).unwrap(),
         }
     }
 }
@@ -186,7 +186,9 @@ impl Hasher for BlockHasher {
 
     fn finish(self) -> Result<BlockHash> {
         let mut buf = [0u8; 32];
-        self.blake.variable_result(&mut buf).map_err(|_| "Invalid key length")?;
+        self.blake
+            .variable_result(&mut buf)
+            .map_err(|_| "Invalid key length")?;
         Ok(BlockHash(buf))
     }
 }

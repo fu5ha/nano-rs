@@ -8,7 +8,7 @@ repository = "https://github.com/termhn/nano-rs"
 slog = "2.1"
 bitflags = "1.0"
 error-chain = "0.11"
-bytes = "0.4"
+bytes = { version = "0.4", features = ["serde"] }
 blake2 = "0.7"
 nanopow-rs = { path = "../nanopow-rs" }
 data-encoding = "2.1"
