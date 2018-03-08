@@ -4,8 +4,8 @@ error_chain!{
     errors {
         /// Invalid character used in hex string
         InvalidHexCharacterError(pos: usize) {
-        description("invalid character in hex")
-        display("Invalid character in hex string at position {}", pos)
+            description("invalid character in hex")
+            display("Invalid character in hex string at position {}", pos)
         }
         /// Attempted to set invalid work for a block
         InvalidWorkError {

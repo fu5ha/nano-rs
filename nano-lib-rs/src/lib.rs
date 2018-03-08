@@ -6,6 +6,11 @@ extern crate error_chain;
 #[macro_use]
 extern crate bitflags;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
+
 extern crate blake2;
 extern crate bytes;
 extern crate data_encoding;

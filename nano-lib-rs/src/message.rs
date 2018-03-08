@@ -1,4 +1,4 @@
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
 #[repr(u8)]
 pub enum MessageKind {
   InvalidMessage,
@@ -14,7 +14,7 @@ pub enum MessageKind {
 
 pub const MAGIC_NUMBER: u8 = 0x52;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
 #[repr(u8)]
 pub enum NetworkKind {
   Test = 'A' as u8,
@@ -22,7 +22,7 @@ pub enum NetworkKind {
   Main = 'C' as u8,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum Version {
   One = 0x01,
@@ -34,12 +34,14 @@ pub enum Version {
 }
 
 bitflags! {
+  #[derive(Serialize, Deserialize)]
   pub struct Extensions: u16 {
     const IPV4_ONLY = 1;
     const BOOTSTRAP_NODE = 2;
   }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MessageHeader {
   pub magic_number: u8,
   pub network: NetworkKind,
