@@ -1,7 +1,11 @@
-use hex;
 
 error_chain! {
   errors {
+    /// Invalid character used in hex string
+    InvalidHexCharacterError(pos: usize) {
+      description("invalid character in hex")
+      display("Invalid character in hex string at position {}", pos)
+    }
     /// Attempted to create an InputHash with incorrect length
     HashLengthError {
       description("attempted to create InputHash with invalid length")
@@ -16,7 +20,6 @@ error_chain! {
   }
 
   foreign_links {
-    FromHexConversionError(hex::FromHexError) #[doc = "An error occurred while converting from hex"];
     FormatError(::std::fmt::Error) #[doc = "A formatting error occured"];
   }
 }

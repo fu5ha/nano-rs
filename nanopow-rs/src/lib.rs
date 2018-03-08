@@ -10,7 +10,7 @@
 extern crate error_chain;
 extern crate blake2;
 extern crate rand;
-extern crate hex;
+extern crate data_encoding;
 extern crate crossbeam_utils;
 extern crate crossbeam_channel;
 extern crate num_cpus;
@@ -18,7 +18,7 @@ extern crate num_cpus;
 use blake2::{Blake2b};
 use blake2::digest::{Input, VariableOutput};
 
-use hex::{FromHex, ToHex};
+use data_encoding::{HEXLOWER, HEXUPPER};
 
 use rand::{XorShiftRng, Rng, SeedableRng};
 
@@ -39,8 +39,14 @@ impl Work
 
     /// Convert hexadecimal formatted data into a Work value
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
-        let bytes: [u8; 8] = FromHex::from_hex(s)?;
-        Ok(Work(bytes))
+        let bytes = s.as_ref();
+        if bytes.len() != 16 {
+            bail!(ErrorKind::WorkLengthError);
+        }
+        let mut buf = [0u8; 8];
+        let _ = HEXLOWER.decode_mut(bytes, &mut buf)
+            .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
+        Ok(Work(buf))
     }
 
     /// Create Work from a raw byte slice
@@ -65,8 +71,7 @@ impl AsRef<[u8]> for Work {
 
 impl From<Work> for String {
     fn from(work: Work) -> Self {
-        let mut string = String::with_capacity(16);
-        work.write_hex(&mut string).unwrap();
+        let string = HEXLOWER.encode(&work.0);
         string
     }
 }
@@ -84,8 +89,14 @@ impl InputHash
 
     /// Convert hexadecimal formatted data into an InputHash
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
-        let bytes: [u8; 32] = FromHex::from_hex(s)?;
-        Ok(InputHash(bytes))
+        let bytes = s.as_ref();
+        if bytes.len() != 64 {
+            bail!(ErrorKind::WorkLengthError);
+        }
+        let mut buf = [0u8; 32];
+        let _ = HEXUPPER.decode_mut(bytes, &mut buf)
+            .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
+        Ok(InputHash(buf))
     }
 
     /// Create an InputHash from a raw byte slice
@@ -110,8 +121,7 @@ impl AsRef<[u8]> for InputHash {
 
 impl From<InputHash> for String {
     fn from(hash: InputHash) -> Self {
-        let mut string = String::with_capacity(64);
-        hash.write_hex_upper(&mut string).unwrap();
+        let string = HEXUPPER.encode(&hash.0);
         string
     }
 }
@@ -216,7 +226,7 @@ mod tests {
     fn creates_input_hash_from_hex_and_bytes() {
         let hex = String::from("8D3E5F07BFF7B7484CDCB392F47009F62997253D28BD98B94BCED95F03C4DA09");
         let hash = InputHash::from_hex(&hex).unwrap();
-        let hash2 = InputHash::from_bytes(&Vec::from_hex(&hex).unwrap()).unwrap();
+        let hash2 = InputHash::from_bytes(HEXUPPER.decode(hex.as_ref()).unwrap()).unwrap();
         assert!(hash.0 == hash2.0);
     }
 
@@ -232,7 +242,7 @@ mod tests {
     fn creates_work_from_hex_and_bytes() {
         let hex = String::from("4effb6b0cd5625e2");
         let work = Work::from_hex(&hex).unwrap();
-        let work2 = Work::from_bytes(&Vec::from_hex(&hex).unwrap()).unwrap();
+        let work2 = Work::from_bytes(HEXLOWER.decode(hex.as_ref()).unwrap()).unwrap();
         assert!(work.0 == work2.0);
     }
 
