@@ -1,3 +1,5 @@
+/// Allows an enum to be serialized and deserialized into its value (stored as a single byte)
+/// This is how many of the header/metadata values are stored in Nano network `Message`s
 #[macro_export]
 macro_rules! enum_byte {
     ($name:ident { $($variant:ident = $value:expr, )* }) => {

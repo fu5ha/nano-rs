@@ -162,7 +162,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "nanopow-rs"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "blake2 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
