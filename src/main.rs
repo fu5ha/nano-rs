@@ -47,7 +47,7 @@ fn setup_logger() -> Result<()> {
                 message
             ))
         })
-        .level(log::LevelFilter::Trace)
+        .level(log::LevelFilter::Debug)
         .chain(std::io::stdout())
         .chain(fern::log_file(format!("{}nano-rs__{}.log", base_path, chrono::Local::now().format("%Y-%m-%d__%H-%M-%S")))?)
         .apply()?;
@@ -119,20 +119,27 @@ fn run() -> Result<()> {
     let init_msgs = stream::iter_ok::<_, nano_lib_rs::error::Error>(initial_peers.into_iter()).map(|peer| {
         (MessageBuilder::new(MessageKind::KeepAliveMessage).build(), peer)
     });
-    let handler = sink.send_all(init_msgs)
-        .and_then(|(sink, _)| {
-            let out_stream = stream.map(|(msg, addr)| {
-                let kind = msg.kind();
-                info!("Received message of kind: {:?} from {}", kind, addr);
-                (MessageBuilder::new(MessageKind::KeepAliveMessage).build(), addr)
-            });
-            sink.send_all(out_stream)
-        });
+    let handler = init_msgs.forward(
+        sink.sink_map_err(|e| { 
+            format!("Error in sink: {}", e)
+        })
+    )
+        .map(|_| ())
+        .map_err(|e| error!("Got error: {:?}", e));
+    // let handler = sink.send_all(init_msgs)
+    //     .and_then(|(sink, _)| {
+    //         let out_stream = stream.map(|(msg, addr)| {
+    //             let kind = msg.kind();
+    //             info!("Received message of kind: {:?} from {}", kind, addr);
+    //             (MessageBuilder::new(MessageKind::KeepAliveMessage).build(), addr)
+    //         });
+    //         sink.send_all(out_stream)
+    //     });
 
     tokio::run(
         handler
-            .map(|_| ())
-            .map_err(|e| error!("Got error: {:?}", e))
+            // .map(|_| ())
+            // .map_err(|e| error!("Got error: {:?}", e))
     );
 
     info!("Stopping nano-rs!");
