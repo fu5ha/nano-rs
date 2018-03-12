@@ -1,6 +1,7 @@
 use bytes::{Bytes, BytesMut, BufMut};
 use bincode;
 use super::error::*;
+use tokio_io::codec::{Decoder, Encoder};
 
 enum_byte!(MessageKind {
     InvalidMessage = 0x00,
@@ -40,7 +41,7 @@ bitflags! {
   }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageHeader {
     pub magic_number: u8,
     pub network: NetworkKind,
@@ -51,20 +52,18 @@ pub struct MessageHeader {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct Message {
     pub header: MessageHeader,
     pub data: Bytes,
 }
 
 impl Message {
-    pub fn from_bytes(mut bytes: Bytes) -> Result<Self> {
-        let header_bytes = bytes.split_to(8);
-        let header: MessageHeader = bincode::deserialize(&header_bytes[..])?;
-        Ok(Message {
+    pub fn new(header: MessageHeader, bytes: Bytes) -> Self {
+        Message {
             header,
             data: bytes,
-        })
+        }
     }
 
     pub fn serialize(&self) -> Result<Bytes> {
@@ -150,6 +149,44 @@ impl MessageBuilder {
     }
 }
 
+pub struct MessageCodec(());
+
+impl MessageCodec {
+    pub fn new() -> Self {
+        MessageCodec(())
+    }
+}
+
+impl Decoder for MessageCodec {
+    type Item = Message;
+    type Error = Error;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>> {
+        if buf.len() < 8 {
+            return Ok(None)
+        }
+        let header_bytes = buf.split_to(8);
+        let header: MessageHeader = bincode::deserialize(&header_bytes[..])?;
+        let len = buf.len();
+        let data = Bytes::from(buf.split_off(len - 1));
+        let message = Message::new(header, data);
+        Ok(Some(message))
+    }
+}
+
+impl Encoder for MessageCodec {
+    type Item = Message;
+    type Error = Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<()> {
+        let msg_ser = item.serialize()?;
+        trace!("Serialized message: {:?}", &msg_ser[..]);
+        dst.reserve(msg_ser.len());
+        dst.put(msg_ser);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +195,12 @@ mod tests {
     #[test]
     fn properly_deserializes_message() {
         let message_raw = Bytes::from(HEXUPPER.decode(b"5243050501020000FF").unwrap());
-        let message = Message::from_bytes(message_raw.clone()).unwrap();
+        let mut buf = BytesMut::from(message_raw.clone());
+        let header_bytes = buf.split_to(8);
+        let header: MessageHeader = bincode::deserialize(&header_bytes[..]).unwrap();
+        let len = buf.len();
+        let data = Bytes::from(buf.split_off(len - 1));
+        let message = Message::new(header, data);
         assert_eq!(message.header.magic_number, MAGIC_NUMBER);
         assert_eq!(message.header.network, NetworkKind::Main);
         assert_eq!(message.header.version_max, Version::Five);
@@ -177,5 +219,32 @@ mod tests {
             .build();
         let message_ser = message.serialize().unwrap();
         assert_eq!(&message_ser[..], &message_raw[..]);
+    }
+
+    #[test]
+    fn encode_decode() {
+        let data = [0xFFu8];
+        let message = MessageBuilder::new(MessageKind::KeepAliveMessage)
+            .with_data(Bytes::from(&data[..]))
+            .build();
+        let mut buf = BytesMut::new();
+        let mut a_codec = MessageCodec::new();
+        let mut b_codec = MessageCodec::new();
+
+        a_codec.encode(message.clone(), &mut buf).expect("Alice should encode");
+        let res = b_codec.decode(&mut buf).unwrap().expect("Bob should decode");
+        assert_eq!(message, res);
+
+        b_codec.encode(message.clone(), &mut buf).expect("Bob should encode");
+        let res = a_codec.decode(&mut buf).unwrap().expect("Alice should decode");
+        assert_eq!(message, res);
+    }
+
+    #[test]
+    fn decode_incomplete() {
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(b"\x52");
+        let mut codec = MessageCodec::new();
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
     }
 }

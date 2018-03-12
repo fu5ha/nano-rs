@@ -4,6 +4,9 @@
 extern crate error_chain;
 
 #[macro_use]
+extern crate log;
+
+#[macro_use]
 extern crate bitflags;
 
 extern crate bincode;
@@ -17,6 +20,8 @@ extern crate bytes;
 extern crate data_encoding;
 
 extern crate nanopow_rs;
+
+extern crate tokio_io;
 
 #[macro_use]
 mod macros; 

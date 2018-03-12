@@ -29,5 +29,6 @@ error_chain!{
     foreign_links {
         FormatError(::std::fmt::Error) #[doc = "A formatting error occured"];
         BincodeError(::bincode::Error) #[doc = "An error occurred while serializing/deserializing binary data."];
+        IoError(::std::io::Error) #[doc = "An IO error occurred"];
     }
 }
