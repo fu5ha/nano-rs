@@ -9,11 +9,22 @@ macro_rules! enum_byte {
             $($variant = $value,)*
         }
 
+        impl $name {
+            pub fn from_value(value: u8) -> Option<Self> {
+                // Rust does not come with a simple way of converting a
+                // number to an enum, so use a big `match`.
+                match value {
+                    $( $value => Some($name::$variant), )*
+                    _ => None
+                }
+            }
+        }
+
         impl ::serde::Serialize for $name {
             fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
                 where S: ::serde::Serializer
             {
-                // Serialize the enum as a u64.
+                // Serialize the enum as a u8.
                 serializer.serialize_u8(*self as u8)
             }
         }
@@ -31,16 +42,14 @@ macro_rules! enum_byte {
                         formatter.write_str("byte")
                     }
 
-                    fn visit_u64<E>(self, value: u64) -> ::std::result::Result<$name, E>
+                    fn visit_u8<E>(self, value: u8) -> ::std::result::Result<$name, E>
                         where E: ::serde::de::Error
                     {
-                        // Rust does not come with a simple way of converting a
-                        // number to an enum, so use a big `match`.
-                        match value {
-                            $( $value => Ok($name::$variant), )*
-                            _ => Err(E::custom(
+                        match $name::from_value(value) {
+                            Some(v) => Ok(v),
+                            None => Err(E::custom(
                                 format!("unknown {} value: {}",
-                                stringify!($name), value))),
+                                stringify!($name), value)))
                         }
                     }
                 }

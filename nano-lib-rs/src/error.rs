@@ -20,6 +20,16 @@ error_chain!{
             description("attempted to create Signature with invalid length")
             display("Attempted to create Signature with invalid length")
         }
+        /// Attempted to create or parse a message with invalid data length for its kind
+        MessageDataLengthError(kind: super::message::MessageKind, len: usize) {
+            description("Attempted to create or parse a message with invalid data length for its kind")
+            display("Attempted to create message of type {:?} with data length {} (should be {})", kind, len, kind.size().unwrap())
+        }
+        /// Attempted to create or parse a message with invalid header length
+        MessageHeaderLengthError(len: usize) {
+            description("Attempted to create or parse a message with invalid header length")
+            display("Attempted to create message with buffer of length {} (must be at least 8)", len)
+        }
     }
 
     links {

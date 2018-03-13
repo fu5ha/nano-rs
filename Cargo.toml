@@ -13,3 +13,4 @@ nano-lib-rs = {path = "./nano-lib-rs"}
 log = "0.4"
 fern = "0.5"
 chrono = "0.4"
+bytes = "0.4"

@@ -11,17 +11,15 @@ use error::*;
 
 use data_encoding::HEXUPPER;
 
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub enum BlockKind {
-    Invalid,
-    NotABlock,
-    SendBlock,
-    ReceiveBlock,
-    OpenBlock,
-    ChangeBlock,
-    UniversalBlock, // not implemented
-}
+enum_byte!(BlockKind {
+    Invalid = 0,
+    NotABlock = 1,
+    SendBlock = 2,
+    ReceiveBlock = 3,
+    OpenBlock = 4,
+    ChangeBlock = 5,
+    UniversalBlock = 6, // not implemented
+});
 
 impl BlockKind {
     pub fn size(&self) -> usize {
