@@ -35,6 +35,12 @@ This repo serves as a monorepo that contains several crates, including the root 
 
 First, install Rust: https://rustup.rs/
 
+Then make sure you're running nightly rust:
+```sh
+$ rustup toolchain install nightly
+$ rustup default nightly
+```
+
 Then,
 
 ```sh
