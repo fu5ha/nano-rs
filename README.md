@@ -30,3 +30,17 @@ This repo serves as a monorepo that contains several crates, including the root 
 - [ ] Add compatibility with existing Nano Nodes
 - [ ] Add complete testing harness
 - [ ] Possibly more things in the future
+
+## Installation/Usage:
+
+First, install Rust: https://rustup.rs/
+
+Then,
+
+```sh
+$ git clone https://github.com/termhn/nano-rs
+$ cd nano-rs
+$ cargo run --release
+```
+
+Logging is printed to stderr and saved in files in the `logs/` folder.
