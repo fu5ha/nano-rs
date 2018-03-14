@@ -1,25 +1,27 @@
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{Bytes, BytesMut, BufMut, Buf, IntoBuf, LittleEndian};
 use bincode;
 use error::*;
-use block::BlockKind;
-use tokio_io::codec::{Decoder, Encoder};
+use block::{BlockKind, Block, Signature};
+use std::net::{SocketAddrV6, Ipv6Addr};
+use std::cmp;
+use keys::PublicKey;
 
 enum_byte!(MessageKind {
-    InvalidMessage = 0x00,
+    Invalid = 0x00,
     NotAMessage = 0x01,
-    KeepAliveMessage = 0x02,
-    PublishMessage = 0x03,
-    ConfirmReqMessage = 0x04,
-    ConfirmAckMessage = 0x05,
-    BulkPullMessage = 0x06,
-    BulkPushMessage = 0x07,
-    FrontierReqMessage = 0x08,
+    KeepAlive = 0x02,
+    Publish = 0x03,
+    ConfirmReq = 0x04,
+    ConfirmAck = 0x05,
+    BulkPull = 0x06,
+    BulkPush = 0x07,
+    FrontierReq = 0x08,
 });
 
 impl MessageKind {
     pub fn size(&self) -> Option<usize> {
         match *self {
-            MessageKind::KeepAliveMessage => Some(144),
+            MessageKind::KeepAlive => Some(144),
             _ => None
         }
     }
@@ -63,32 +65,127 @@ pub struct MessageHeader {
     pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
-pub struct Message {
-    pub header: MessageHeader,
-    pub data: Bytes,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageInner {
+    Invalid,
+    KeepAlive(Vec<SocketAddrV6>),
+    Publish(Block),
+    ConfirmReq(Block),
+    ConfirmAck {
+        public_key: PublicKey,
+        signature: Signature,
+        sequence: u64,
+        block: Block,
+    }
 }
 
-impl Message {
-    pub fn new(mut header: MessageHeader, bytes: Bytes) -> Self {
-        let len = bytes.len();
-        if let Some(s) = header.kind.size() {
-            if len != s {
-                header.kind = MessageKind::InvalidMessage;
-            }
-        }
-        Message {
-            header,
-            data: bytes,
+impl MessageInner {
+    pub fn serialize_bytes(&self) -> Bytes {
+        match *self {
+            MessageInner::Invalid => {
+                Bytes::with_capacity(0)
+            },
+            MessageInner::KeepAlive(ref peers) => {
+                let mut buf = BytesMut::new();
+                buf.reserve(MessageKind::KeepAlive.size().unwrap());
+                // Official node will only accept exactly 8 peers
+                let mut peers = peers.clone();
+                for _ in 0..(8 - cmp::min(peers.len(), 8)) {
+                    peers.push("[::]:0".parse().unwrap());
+                }
+                for peer in &peers[..8] {
+                    buf.put_slice(&peer.ip().octets()[..]);
+                    buf.put_u16::<LittleEndian>(peer.port());
+                }
+                Bytes::from(buf)
+            },
+            MessageInner::Publish(ref block) => {
+                block.serialize_bytes()
+            },
+            MessageInner::ConfirmReq(ref block) => {
+                block.serialize_bytes()
+            },
+            MessageInner::ConfirmAck {
+                ref public_key,
+                ref signature,
+                ref sequence,
+                ref block,
+            } => {
+                let mut buf = BytesMut::new();
+                buf.reserve(32 + 32 + 8 + block.kind.size());
+                buf.put(public_key.as_ref());
+                buf.put(signature.as_ref());
+                buf.put_u64::<LittleEndian>(*sequence);
+                let block_bytes = block.serialize_bytes();
+                buf.put(block_bytes);
+                Bytes::from(buf)
+            },
         }
     }
 
-    pub fn serialize(&self) -> Result<Bytes> {
+    pub fn deserialize_bytes(kind: MessageKind, bytes: Bytes) -> Result<Self> {
+        Ok(match kind {
+            MessageKind::KeepAlive => {
+                let peers: Vec<SocketAddrV6> = bytes.chunks(18).filter_map(|chunk| {
+                    if chunk.len() == 18 {
+                        let mut buf = chunk.into_buf();
+                        let mut octets = [0u8; 16];
+                        for i in 0..16 {
+                            octets[i] = buf.get_u8();
+                        }
+                        Some(SocketAddrV6::new(Ipv6Addr::from(octets), buf.get_u16::<LittleEndian>(), 0, 0))
+                    } else {
+                        None
+                    }
+                }).collect();
+                if peers.len() > 0 {
+                    MessageInner::KeepAlive(peers)
+                } else {
+                    MessageInner::Invalid
+                }
+            },
+            _ => {
+                MessageInner::Invalid
+            }
+       })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub header: MessageHeader,
+    pub inner: MessageInner,
+}
+
+impl Message {
+    pub fn new(header: MessageHeader, inner: MessageInner) -> Self {
+        Message {
+            header,
+            inner
+        }
+    }
+
+    pub fn serialize_bytes(&self) -> Result<Bytes> {
         let header_ser = bincode::serialize(&self.header)?;
-        let mut buf = BytesMut::with_capacity(header_ser.len() + self.data.len());
+        let data = self.inner.serialize_bytes();
+        let mut buf = BytesMut::with_capacity(header_ser.len() + data.len());
         buf.put(header_ser);
-        buf.put(self.data.clone());
+        buf.put(data);
         Ok(Bytes::from(buf))
+    }
+
+    pub fn deserialize_bytes(mut bytes: Bytes) -> Result<Self> {
+        let len = bytes.len();
+        if bytes.len() < 8 {
+            bail!(ErrorKind::MessageHeaderLengthError(len));
+        }
+        let header_bytes = bytes.split_to(8);
+        let header: MessageHeader = bincode::deserialize(&header_bytes)?;
+        let inner = MessageInner::deserialize_bytes(header.kind, bytes)?;
+        Ok(Message {
+            header,
+            inner
+        })
     }
 
     pub fn kind(&self) -> MessageKind {
@@ -102,9 +199,9 @@ pub struct MessageBuilder {
     version_using: Option<Version>,
     version_min: Option<Version>,
     kind: MessageKind,
-    extensions: Option<Extensions>,
     block_kind: Option<BlockKind>,
-    data: Option<Bytes>,
+    extensions: Option<Extensions>,
+    inner: Option<MessageInner>,
 }
 
 impl MessageBuilder {
@@ -117,7 +214,7 @@ impl MessageBuilder {
             kind: kind,
             extensions: None,
             block_kind: None,
-            data: None,
+            inner: None,
         }
     }
 
@@ -151,8 +248,8 @@ impl MessageBuilder {
         self
     }
 
-    pub fn with_data(mut self, data: Bytes) -> Self {
-        self.data = Some(data);
+    pub fn with_data(mut self, data: MessageInner) -> Self {
+        self.inner = Some(data);
         self
     }
 
@@ -167,45 +264,8 @@ impl MessageBuilder {
             block_kind: self.block_kind.unwrap_or(BlockKind::Invalid),
             extensions: self.extensions.unwrap_or(Extensions::NONE),
         };
-        let data = self.data.unwrap_or(Bytes::with_capacity(0));
-        Message::new(header, data)
-    }
-}
-
-pub struct MessageCodec(());
-
-impl MessageCodec {
-    pub fn new() -> Self {
-        MessageCodec(())
-    }
-}
-
-impl Decoder for MessageCodec {
-    type Item = Message;
-    type Error = Error;
-
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>> {
-        if buf.len() < 8 {
-            return Ok(Some(MessageBuilder::new(MessageKind::InvalidMessage).build()));
-        }
-        let header_bytes = buf.split_to(8);
-        let header: MessageHeader = bincode::deserialize(&header_bytes[..])?;
-        let data = Bytes::from(buf.take());
-        let message = Message::new(header, data);
-        Ok(Some(message))
-    }
-}
-
-impl Encoder for MessageCodec {
-    type Item = Message;
-    type Error = Error;
-
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<()> {
-        let msg_ser = item.serialize()?;
-        trace!("Serialized message: {:?}", &msg_ser[..]);
-        dst.reserve(msg_ser.len());
-        dst.put(msg_ser);
-        Ok(())
+        let inner = self.inner.unwrap_or(MessageInner::Invalid);
+        Message::new(header, inner)
     }
 }
 
@@ -216,68 +276,29 @@ mod tests {
 
     #[test]
     fn deserialize_message() {
-        let mut message_raw = BytesMut::from(HEXUPPER.decode(b"5243050501020000").unwrap());
-        message_raw.extend_from_slice(&[0u8;144]);
-        let message_raw = Bytes::from(message_raw);
-        let mut buf = BytesMut::from(message_raw.clone());
-        let header_bytes = buf.split_to(8);
-        let header: MessageHeader = bincode::deserialize(&header_bytes[..]).unwrap();
-        let data = Bytes::from(buf.take());
-        let message = Message::new(header, data);
+        // TODO: Deserialize message body
+        let message_raw = Bytes::from(HEXUPPER.decode(b"524305050102000000000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B").unwrap());
+        let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
+        let message = Message::deserialize_bytes(message_raw.clone()).expect("should deserialize");
         assert_eq!(message.header.magic_number, MAGIC_NUMBER);
         assert_eq!(message.header.network, NetworkKind::Main);
         assert_eq!(message.header.version_max, Version::Five);
         assert_eq!(message.header.version_using, Version::Five);
         assert_eq!(message.header.version_min, Version::One);
-        assert_eq!(message.kind(), MessageKind::KeepAliveMessage);
+        assert_eq!(message.header.kind, MessageKind::KeepAlive);
+        assert_eq!(message.header.block_kind, BlockKind::Invalid);
         assert_eq!(message.header.extensions, Extensions::NONE);
-        assert_eq!(message.header.block_kind, BlockKind::NotABlock);
-        assert_eq!(&message.data[..], &message_raw[8..]);
+        assert_eq!(message.inner, MessageInner::KeepAlive(vec![sock.clone(); 8]));
     }
 
     #[test]
     fn serialize_message() {
-        let mut message_raw = BytesMut::from(HEXUPPER.decode(b"5243050501020000").unwrap());
-        message_raw.extend_from_slice(&[0u8;144]);
-        let message_raw = Bytes::from(message_raw);
-        let message = MessageBuilder::new(MessageKind::KeepAliveMessage)
-            .with_data(message_raw.slice_from(8))
+        let message_raw = Bytes::from(HEXUPPER.decode(b"524305050102000000000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B").unwrap());
+        let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
+        let message = MessageBuilder::new(MessageKind::KeepAlive)
+            .with_data(MessageInner::KeepAlive(vec![sock.clone(); 8]))
             .build();
-        let message_ser = message.serialize().unwrap();
+        let message_ser = message.serialize_bytes().unwrap();
         assert_eq!(&message_ser[..], &message_raw[..]);
-    }
-
-    #[test]
-    fn encode_decode() {
-        let data = [0xFFu8; 144];
-        let message = MessageBuilder::new(MessageKind::KeepAliveMessage)
-            .with_data(Bytes::from(&data[..]))
-            .build();
-        let mut buf = BytesMut::new();
-        let mut a_codec = MessageCodec::new();
-
-        a_codec.encode(message.clone(), &mut buf).expect("should encode");
-        let res = a_codec.decode(&mut buf).unwrap().expect("should decode");
-        assert_eq!(message, res);
-    }
-
-    #[test]
-    fn decode_invalid_header() {
-        let mut buf = BytesMut::new();
-        buf.extend_from_slice(b"\x52");
-        let mut codec = MessageCodec::new();
-        
-        let res = codec.decode(&mut buf).unwrap().expect("should decode");
-        assert_eq!(res.kind(), MessageKind::InvalidMessage);
-    }
-
-    #[test]
-    fn decode_invalid_message() {
-        let mut buf = BytesMut::from(HEXUPPER.decode(b"5243050501020000").unwrap());
-        buf.extend_from_slice(b"\x52");
-        let mut codec = MessageCodec::new();
-        
-        let res = codec.decode(&mut buf).unwrap().expect("should decode");
-        assert_eq!(res.kind(), MessageKind::InvalidMessage);
     }
 }

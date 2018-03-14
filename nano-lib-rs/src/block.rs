@@ -1,7 +1,9 @@
 extern crate nanopow_rs;
-use nanopow_rs::{check_work, generate_work, InputHash, Work};
+use nanopow_rs::{InputHash, Work};
 
-// use bytes::{Bytes};
+use byteorder::{BigEndian, ByteOrder};
+
+use bytes::{Bytes, BytesMut, BufMut};
 use blake2::Blake2b;
 use blake2::digest::{Input, VariableOutput};
 
@@ -11,31 +13,7 @@ use error::*;
 
 use data_encoding::HEXUPPER;
 
-enum_byte!(BlockKind {
-    Invalid = 0,
-    NotABlock = 1,
-    SendBlock = 2,
-    ReceiveBlock = 3,
-    OpenBlock = 4,
-    ChangeBlock = 5,
-    UniversalBlock = 6, // not implemented
-});
-
-impl BlockKind {
-    pub fn size(&self) -> usize {
-        match *self {
-            BlockKind::Invalid => 0,
-            BlockKind::NotABlock => 0,
-            BlockKind::SendBlock => 80,
-            BlockKind::ReceiveBlock => 64,
-            BlockKind::OpenBlock => 96,
-            BlockKind::ChangeBlock => 32,
-            BlockKind::UniversalBlock => 0, // not implemented
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockHash([u8; 32]);
 
 impl BlockHash {
@@ -91,7 +69,7 @@ impl From<BlockHash> for InputHash {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Signature([u8; 32]);
 
 impl Signature {
@@ -135,25 +113,84 @@ impl From<Signature> for String {
     }
 }
 
-pub trait Block {
-    fn kind(&self) -> BlockKind;
-    fn previous(&self) -> Option<BlockHash>;
-    fn next(&self) -> Option<BlockHash>;
-    fn signature(&self) -> Option<Signature>;
-    fn is_signed(&self) -> bool {
+enum_byte!(BlockKind {
+    Invalid = 0,
+    NotABlock = 1,
+    Send = 2,
+    Receive = 3,
+    Open = 4,
+    Change = 5,
+    Utx = 6,
+});
+
+impl BlockKind {
+    pub fn size(&self) -> usize {
+        match *self {
+            BlockKind::Invalid => 0,
+            BlockKind::NotABlock => 0,
+            BlockKind::Send => 80,
+            BlockKind::Receive => 64,
+            BlockKind::Open => 96,
+            BlockKind::Change => 32,
+            BlockKind::Utx => 144,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub kind: BlockKind,
+    pub inner: BlockInner,
+    pub next: Option<BlockHash>,
+    pub work: Option<Work>,
+    pub signature: Option<Signature>,
+    pub hash: Option<BlockHash>
+}
+
+impl Block {
+    pub fn next(&self) -> Option<BlockHash> {
+        self.next
+    }
+    pub fn signature(&self) -> Option<Signature> {
+        self.signature
+    }
+    pub fn sign(&mut self, _key: &PrivateKey) -> Result<()> {
+        unimplemented!();
+    }
+    pub fn work(&self) -> Option<Work> {
+        self.work.clone()
+    }
+    pub fn set_work(&mut self, work: Work) -> Result<()> {
+        if !self.check_work(&work) {
+            bail!(ErrorKind::InvalidWorkError);
+        }
+        self.work = Some(work);
+        Ok(())
+    }
+    pub fn generate_work(&mut self) {
+        let work = nanopow_rs::generate_work(&self.inner.work_source().into(), None);
+        self.work = work;
+    }
+    pub fn check_work(&self, work: &Work) -> bool {
+        nanopow_rs::check_work(&self.inner.work_source().into(), work)
+    }
+    pub fn cached_hash(&self) -> Option<BlockHash> {
+        self.hash
+    }
+    pub fn calculate_hash(&mut self) -> Result<BlockHash> {
+        let mut hasher = BlockHasher::new();
+        self.inner.hash(&mut hasher);
+        let hash = hasher.finish()?;
+        self.hash = Some(hash);
+        Ok(hash)
+    }
+    pub fn is_signed(&self) -> bool {
         self.signature().is_some()
     }
-    fn sign(&mut self, key: &PrivateKey) -> Result<()>;
-    fn work(&self) -> Option<Work>;
-    fn set_work(&mut self, work: Work) -> Result<()>;
-    fn generate_work(&mut self);
-    fn check_work(&self, work: &Work) -> bool;
-    fn has_work(&self) -> bool {
+    pub fn has_work(&self) -> bool {
         self.work().is_some()
     }
-    fn cached_hash(&self) -> Option<BlockHash>;
-    fn calculate_hash(&mut self) -> Result<BlockHash>;
-    fn hash(&mut self, force: bool) -> Result<BlockHash> {
+    pub fn hash(&mut self, force: bool) -> Result<BlockHash> {
         if !force {
             let cached_hash = self.cached_hash();
             if let Some(hash) = cached_hash {
@@ -161,6 +198,9 @@ pub trait Block {
             }
         }
         self.calculate_hash()
+    }
+    pub fn serialize_bytes(&self) -> Bytes {
+        self.inner.serialize_bytes()
     }
 }
 
@@ -191,129 +231,172 @@ impl Hasher for BlockHasher {
     }
 }
 
-pub struct RawSendBlock {
-    previous: BlockHash,
-    destination: BlockHash,
-    balance: u128,
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum BlockInner {
+    Send {
+        previous: BlockHash,
+        destination: PublicKey,
+        /// The balance of the account *after* the send.
+        balance: u128,
+    },
+    Receive {
+        previous: BlockHash,
+        /// The block we're receiving.
+        source: BlockHash,
+    },
+    /// The first "receive" in an account chain.
+    /// Creates the account, and sets the representative.
+    Open {
+        /// The block we're receiving.
+        source: BlockHash,
+        representative: PublicKey,
+        account: PublicKey,
+    },
+    /// Changes the representative for an account.
+    Change {
+        previous: BlockHash,
+        representative: PublicKey,
+    },
+    /// A universal transaction which contains the account state.
+    Utx {
+        account: PublicKey,
+        previous: BlockHash,
+        representative: PublicKey,
+        balance: u128,
+        /// Link field contains source block_hash if receiving, destination account if sending
+        link: [u8; 32],
+    },
 }
 
-impl Hash for RawSendBlock {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.previous.hash(state);
-        self.destination.hash(state);
-        self.balance.hash(state);
-    }
-}
-
-pub struct RawReceiveBlock {
-    previous: BlockHash,
-    source: BlockHash,
-}
-
-impl Hash for RawReceiveBlock {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.previous.hash(state);
-        self.source.hash(state);
-    }
-}
-
-pub struct RawOpenBlock {
-    source: BlockHash,
-    representative: PublicKey,
-    account: PublicKey,
-}
-
-impl Hash for RawOpenBlock {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.source.hash(state);
-        self.representative.hash(state);
-        self.account.hash(state);
-    }
-}
-
-pub struct RawChangeBlock {
-    previous: BlockHash,
-    representative: BlockHash,
-}
-
-impl Hash for RawChangeBlock {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.previous.hash(state);
-        self.representative.hash(state);
-    }
-}
-
-macro_rules! create_block {
-    ( $( $block_name:ident: $raw_block_type:ty),+ ) => {$(
-        pub struct $block_name {
-            inner: $raw_block_type,
-            next: Option<BlockHash>,
-            work: Option<Work>,
-            signature: Option<Signature>,
-            hash: Option<BlockHash>
+impl BlockInner {
+    pub fn work_source(&self) -> InputHash {
+        match *self {
+            BlockInner::Send { ref previous, .. } => previous.clone().into(),
+            BlockInner::Receive { ref previous, .. } => previous.clone().into(),
+            BlockInner::Open { ref account, .. } => account.clone().into(),
+            BlockInner::Change { ref previous, .. } => previous.clone().into(),
+            BlockInner::Utx { ref previous, .. } => previous.clone().into(),
         }
-    )*}
-}
-
-create_block! {
-    SendBlock: RawSendBlock,
-    ReceiveBlock: RawReceiveBlock,
-    OpenBlock: RawOpenBlock,
-    ChangeBlock: RawChangeBlock
-}
-
-macro_rules! impl_block {
-    ( $( $block_name:ident: $work_source:ident ),+ ) => {$(
-        impl Block for $block_name {
-            fn kind(&self) -> BlockKind {
-                BlockKind::$block_name
+    }
+    pub fn serialize_bytes(&self) -> Bytes {
+        let mut buf = BytesMut::new();
+        match *self {
+            BlockInner::Send {
+                ref previous,
+                ref destination,
+                ref balance,
+            } => {
+                buf.reserve(BlockKind::Send.size());
+                buf.put(previous.as_ref());
+                buf.put(destination.as_ref());
+                let mut bal_buf = [0u8; 16];
+                BigEndian::write_u128(&mut bal_buf, *balance);
+                buf.put(&bal_buf[..]);
             }
-            fn previous(&self) -> Option<BlockHash> {
-                None
+            BlockInner::Receive {
+                ref previous,
+                ref source,
+            } => {
+                buf.reserve(BlockKind::Receive.size());
+                buf.put(previous.as_ref());
+                buf.put(source.as_ref());
             }
-            fn next(&self) -> Option<BlockHash> {
-                self.next
+            BlockInner::Open {
+                ref source,
+                ref representative,
+                ref account,
+            } => {
+                buf.reserve(BlockKind::Open.size());
+                buf.put(source.as_ref());
+                buf.put(representative.as_ref());
+                buf.put(account.as_ref());
             }
-            fn signature(&self) -> Option<Signature> {
-                self.signature
+            BlockInner::Change {
+                ref previous,
+                ref representative,
+            } => {
+                buf.reserve(BlockKind::Change.size());
+                buf.put(previous.as_ref());
+                buf.put(representative.as_ref());
             }
-            fn sign(&mut self, _key: &PrivateKey) -> Result<()> {
-                unimplemented!();
-            }
-            fn work(&self) -> Option<Work> {
-                self.work.clone()
-            }
-            fn set_work(&mut self, work: Work) -> Result<()> {
-                if !self.check_work(&work) {
-                    bail!(ErrorKind::InvalidWorkError);
-                }
-                self.work = Some(work);
-                Ok(())
-            }
-            fn generate_work(&mut self) {
-                let work = generate_work(&self.inner.$work_source.clone().into(), None);
-                self.work = work;
-            }
-            fn check_work(&self, work: &Work) -> bool {
-                check_work(&self.inner.$work_source.clone().into(), work)
-            }
-            fn cached_hash(&self) -> Option<BlockHash> {
-                self.hash
-            }
-            fn calculate_hash(&mut self) -> Result<BlockHash> {
-                let mut hasher = BlockHasher::new();
-                self.inner.hash(&mut hasher);
-                let hash = hasher.finish()?;
-                self.hash = Some(hash);
-                Ok(hash)
+            BlockInner::Utx {
+                ref account,
+                ref previous,
+                ref representative,
+                ref balance,
+                ref link,
+            } => {
+                buf.reserve(BlockKind::Utx.size());
+                let mut block_kind_code = [0u8; 32];
+                block_kind_code[31] = BlockKind::Utx as u8;
+                buf.put(&block_kind_code[..]);
+                buf.put(account.as_ref());
+                buf.put(previous.as_ref());
+                buf.put(representative.as_ref());
+                let mut bal_buf = [0u8; 16];
+                BigEndian::write_u128(&mut bal_buf, *balance);
+                buf.put(&bal_buf[..]);
+                buf.put(&link[..]);
             }
         }
-    )*}
+        Bytes::from(buf)
+    }
 }
 
-impl_block! {
-    SendBlock: previous,
-    ReceiveBlock: previous,
-    OpenBlock: account,
-    ChangeBlock: previous
+impl Hash for BlockInner {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match *self {
+            BlockInner::Send {
+                ref previous,
+                ref destination,
+                ref balance,
+            } => {
+                previous.hash(state);
+                destination.hash(state);
+                let mut buf = [0u8; 16];
+                BigEndian::write_u128(&mut buf, *balance);
+                state.write(&buf);
+            }
+            BlockInner::Receive {
+                ref previous,
+                ref source,
+            } => {
+                previous.hash(state);
+                source.hash(state);
+            }
+            BlockInner::Open {
+                ref source,
+                ref representative,
+                ref account,
+            } => {
+                source.hash(state);
+                representative.hash(state);
+                account.hash(state);
+            }
+            BlockInner::Change {
+                ref previous,
+                ref representative,
+            } => {
+                previous.hash(state);
+                representative.hash(state);
+            }
+            BlockInner::Utx {
+                ref account,
+                ref previous,
+                ref representative,
+                ref balance,
+                ref link,
+            } => {
+                state.write(&[0u8; 31]);
+                state.write(&[BlockKind::Utx as u8]); // block type code
+                account.hash(state);
+                previous.hash(state);
+                representative.hash(state);
+                let mut buf = [0u8; 16];
+                BigEndian::write_u128(&mut buf, *balance);
+                state.write(&buf);
+                state.write(link);
+            }
+        }
+    }
 }

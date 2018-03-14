@@ -7,6 +7,7 @@ repository = "https://github.com/termhn/nano-rs"
 [dependencies]
 log = "0.4"
 bitflags = "1.0"
+byteorder = { version = "1.2", features = ["i128"] }
 error-chain = "0.11"
 bytes = { version = "0.4", features = ["serde"] }
 blake2 = "0.7"

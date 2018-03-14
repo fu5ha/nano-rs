@@ -27,7 +27,7 @@ pub mod error;
 use error::*;
 
 /// An 8 byte array used to represent the work value
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Work([u8; 8]);
 
 impl Work
@@ -77,7 +77,7 @@ impl From<Work> for String {
 }
 
 /// A 32 byte array used to represent a valid input hash
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputHash([u8; 32]);
 
 impl InputHash

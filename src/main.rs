@@ -1,7 +1,8 @@
-#![feature(conservative_impl_trait)]
 extern crate tokio;
 extern crate tokio_io;
 extern crate futures;
+
+extern crate data_encoding;
 
 extern crate nano_lib_rs;
 
@@ -17,20 +18,20 @@ extern crate bytes;
 
 mod error;
 use error::*;
+mod net;
+use net::message_codec::MessageCodec;
 
-use nano_lib_rs::message::{MessageBuilder, MessageKind, MessageCodec};
+use nano_lib_rs::message::{MessageBuilder, MessageKind, MessageInner};
 
 use tokio::prelude::*;
 use tokio::net::{UdpSocket, UdpFramed};
 use futures::Future;
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs, SocketAddrV6};
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
-
 struct State {
-    pub peers: Mutex<Vec<SocketAddr>>
+    pub peers: Mutex<Vec<SocketAddrV6>>
 }
 
 impl State {
@@ -40,20 +41,30 @@ impl State {
         }
     }
 
-    pub fn add_peer(&self, peer: SocketAddr) -> usize {
+    pub fn add_peer(&self, peer: SocketAddrV6) {
         let mut peers = self.peers.lock().unwrap();
         let is_present = peers.iter().any(|&p| p == peer);
         if !is_present {
             peers.push(peer);
         }
-        peers.len()
+    }
+
+    pub fn peer_count(&self) -> usize {
+        self.peers.lock().unwrap().len()
+    }
+}
+
+fn to_ipv6(addr: SocketAddr) -> SocketAddrV6 {
+    match addr {
+        SocketAddr::V4(addr) => SocketAddrV6::new(addr.ip().to_ipv6_mapped(), addr.port(), 0, 0),
+        SocketAddr::V6(addr) => addr,
     }
 }
 
 fn run() -> Result<()> {
     info!("Starting nano-rs!");
 
-    let addr = "0.0.0.0:7075".parse()?;
+    let addr = "[::]:7075".parse()?;
     let socket = UdpSocket::bind(&addr)?;
 
     info!("Listening on: {}", socket.local_addr()?);
@@ -61,13 +72,18 @@ fn run() -> Result<()> {
     let (sink, stream) = UdpFramed::new(socket, MessageCodec::new()).split();
 
     let init_addrs = "rai.raiblocks.net:7075".to_socket_addrs()?;
-    let mut initial_peers = Vec::new();
-    for addr in init_addrs {
-        if let SocketAddr::V4(_) = addr {
-            info!("Found initial peer: {}", addr);
-            initial_peers.push(addr);
-        }
-    }
+    let mut init_peers_v6 = Vec::new();
+    let initial_peers: Vec<SocketAddrV6> = init_addrs
+        // TODO: Handle send errors so we can use ipv6 confidently
+        .filter(|&addr| {
+            init_peers_v6.push(to_ipv6(addr));
+            match addr {
+                SocketAddr::V6(_) => false,
+                SocketAddr::V4(_) => true
+            }
+        }).map(|addr| {
+            to_ipv6(addr)
+        }).collect();
 
     if let None = initial_peers.get(0) {
         return Err("Could not connect to initial peer".into());
@@ -75,20 +91,25 @@ fn run() -> Result<()> {
 
     let state = Arc::new(State::new());
 
-    let init_msgs = stream::iter_ok::<_, nano_lib_rs::error::Error>(initial_peers.into_iter()).map(|peer| {
+    let init_msgs = stream::iter_ok::<_, nano_lib_rs::error::Error>(initial_peers.into_iter()).map(move |peer| {
         info!("Sending keepalive to initial peer: {}", peer);
-        let fake_data = [0u8; 144];
-        let msg = MessageBuilder::new(MessageKind::KeepAliveMessage)
-            .with_data(Bytes::from(&fake_data[..]))
+        let msg = MessageBuilder::new(MessageKind::KeepAlive)
+            .with_data(MessageInner::KeepAlive(init_peers_v6.clone()))
             .build();
-        (msg, peer)
+        (msg, SocketAddr::V6(peer))
     });
     let handler = sink.send_all(init_msgs)
         .and_then(move |(_sink, _source_stream)| {
             let state = state.clone();
             stream.for_each(move |content| {
                 let kind = content.0.kind();
-                let count = state.add_peer(content.1);
+                state.add_peer(to_ipv6(content.1));
+                if let MessageInner::KeepAlive(peers) = content.0.inner {
+                    for peer in peers {
+                        state.add_peer(peer);
+                    }
+                }
+                let count = state.peer_count();
                 info!("Received message of kind: {:?} from {}; Current peer count: {}", kind, content.1, count);
                 futures::future::ok(())
             })

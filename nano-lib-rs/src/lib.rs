@@ -1,7 +1,10 @@
 #![recursion_limit = "1024"]
 #![feature(i128_type)]
+#![allow(unused_imports)]
 #[macro_use]
 extern crate error_chain;
+
+extern crate byteorder;
 
 #[macro_use]
 extern crate log;

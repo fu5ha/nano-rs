@@ -1,11 +1,23 @@
 use nanopow_rs::InputHash;
 use super::hash::{Hash, Hasher};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrivateKey([u8; 32]);
 
-#[derive(Clone)]
+impl AsRef<[u8]> for PrivateKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey([u8; 32]);
+
+impl AsRef<[u8]> for PublicKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 impl From<PrivateKey> for PublicKey {
     fn from(_key: PrivateKey) -> Self {
