@@ -42,6 +42,7 @@ enum_byte!(Version {
     Four = 0x04,
     Five = 0x05,
     Six = 0x06,
+    Seven = 0x07,
 });
 
 bitflags! {
@@ -257,8 +258,8 @@ impl MessageBuilder {
         let header = MessageHeader {
             magic_number: MAGIC_NUMBER,
             network: self.network.unwrap_or(NetworkKind::Main),
-            version_max: self.version_max.unwrap_or(Version::Five),
-            version_using: self.version_using.unwrap_or(Version::Five),
+            version_max: self.version_max.unwrap_or(Version::Seven),
+            version_using: self.version_using.unwrap_or(Version::Seven),
             version_min: self.version_min.unwrap_or(Version::One),
             kind: self.kind,
             block_kind: self.block_kind.unwrap_or(BlockKind::Invalid),
