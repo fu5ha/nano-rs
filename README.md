@@ -20,10 +20,10 @@ This repo serves as a monorepo that contains several crates, including the root 
   - [ ] Basic wallet functions
   - [ ] Networking
     - [ ] Receiving keepalives and blocks
-      - [x] (partial) keepalives
+      - [x] keepalives
       - [ ] publish
       - [ ] confirm_ack
-    - [x] (partial) Sending keepalives
+    - [x] Sending keepalives
 - [ ] Add broadcasting and discovery
 - [ ] Add RPC interface
 - [ ] Add voting
