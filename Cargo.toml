@@ -7,6 +7,7 @@ repository = "https://github.com/termhn/nano-rs"
 [dependencies]
 tokio = "0.1"
 tokio-io = "0.1"
+tokio-timer = "0.1"
 futures = "0.1"
 error-chain = "0.11"
 nano-lib-rs = {path = "./nano-lib-rs"}
@@ -15,3 +16,5 @@ fern = "0.5"
 chrono = "0.4"
 bytes = "0.4"
 data-encoding = "2.1"
+rand = "0.4"
+indexmap = "1.0"
