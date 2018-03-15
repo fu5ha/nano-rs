@@ -13,7 +13,8 @@ This repo serves as a monorepo that contains several crates, including the root 
     - [x] Message headers
     - [ ] Message body
       - [x] Block
-      - [ ] Keepalive peers
+      - [X] Keepalive peers
+      - [ ] Others...
   - [ ] Database
   - [x] Proof of work
   - [ ] Cryptographic functions
@@ -23,6 +24,7 @@ This repo serves as a monorepo that contains several crates, including the root 
       - [x] keepalives
       - [ ] publish
       - [ ] confirm_ack
+      - [ ] others...
     - [x] Sending keepalives
 - [ ] Add broadcasting and discovery
 - [ ] Add RPC interface
