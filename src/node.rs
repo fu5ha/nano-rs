@@ -153,9 +153,9 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
     let keepalive_handler = stream::once(Ok(()))
         .chain(timer.interval(Duration::from_secs(KEEPALIVE_INTERVAL)))
         .map(move |_| {
+            let state = state_handle_keepalive.clone();
             let count = state.peer_count();
             info!("Sending keepalives to peers. Current peer count: {}", count);
-            let state = state_handle_keepalive.clone();
             let peers = state.peers.lock().unwrap();
             let inner_state = state.clone();
             stream::iter_ok::<_, Error>(peers.clone().into_iter()).map(move |(addr, _)| {
