@@ -24,7 +24,7 @@ impl<S, I> Stream for LogErrors<S, I>
             match self.inner.poll() {
                 Ok(x) => return Ok(x),
                 Err(e) => {
-                    if let ErrorKind::NonRecoverableStreamError = *e.kind() {
+                    if let ErrorKind::FatalStreamError = *e.kind() {
                         return Err(e);
                     } else {
                         error!("Non-fatal error in stream: {:?}", e);

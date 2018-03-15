@@ -1,13 +1,13 @@
 use net::codec::MessageCodec;
 use net::{UdpFramed};
 
-use nano_lib_rs::message::{MessageBuilder, MessageKind, MessageInner, NetworkKind};
+use nano_lib_rs::message::{MessageBuilder, Message, MessageKind, MessageInner, NetworkKind};
 use nano_lib_rs;
 
 use tokio::prelude::*;
 use tokio::executor::thread_pool::Sender;
 use tokio::net::{UdpSocket};
-use futures::{self, Future};
+use futures::{Future};
 use futures::sync::mpsc;
 
 use std::net::{SocketAddr, SocketAddrV6};
@@ -58,14 +58,16 @@ impl State {
         self.peers.lock().unwrap().len()
     }
 
-    pub fn add_peer(&self, peer: SocketAddrV6) {
+    pub fn add_peer(&self, peer: SocketAddrV6) -> bool {
         let mut map = self.peers.lock().unwrap();
         match map.entry(peer) {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().last_seen = Instant::now();
+                false
             },
             Entry::Vacant(entry) => {
                 entry.insert(PeerInfo::default());
+                true
             }
         }
     }
@@ -109,20 +111,39 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
 
     let state_handle_process = state.clone();
     
-    let process_handler = stream.for_each(move |content| {
+    let process_handler = stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error>> {
             let state = &state_handle_process;
-            let kind = content.0.kind();
-            state.add_peer(to_ipv6(content.1));
-            info!("Received message of kind: {:?} from {}", kind, content.1);
-            if let MessageInner::KeepAlive(new_peers) = content.0.inner {
-                for new_peer in new_peers {
-                    state.add_peer(new_peer);
+            let kind = msg.kind();
+            let _ = state.add_peer(to_ipv6(addr));
+            info!("Received message of kind: {:?} from {}", kind, addr);
+            match msg.kind() {
+                MessageKind::KeepAlive => {
+                    if let MessageInner::KeepAlive(peer_addrs) = msg.inner {
+                        let send_peers = state.random_peers(8);
+                        let msg = MessageBuilder::new(MessageKind::KeepAlive)
+                            .with_data(MessageInner::KeepAlive(send_peers))
+                            .build();
+                        let to_send = peer_addrs.into_iter()
+                            .filter_map(|peer_addr| {
+                                if state.add_peer(peer_addr) {
+                                    Some((msg.clone(), peer_addr))
+                                } else {
+                                    None
+                                }
+                            });
+                        let count = state.peer_count();
+                        info!("Added peers, new peer count: {}", count);
+                        Box::new(stream::iter_ok(to_send)) as _
+                    }
+                    info!("Malformed Keepalive, no peers added!");
+                    Box::new(stream::empty()) as _
+                },
+                _ => {
+                    Box::new(stream::empty()) as _
                 }
-                let count = state.peer_count();
-                info!("Added peers, new peer count: {}", count);
             }
-            futures::future::ok(())
-        });
+        })
+        .flatten();
 
     let state_handle_keepalive = state.clone();
 
@@ -135,7 +156,7 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
             let state = state_handle_keepalive.clone();
             let peers = state.peers.lock().unwrap();
             let inner_state = state.clone();
-            stream::iter_ok::<_, ()>(peers.clone().into_iter()).map(move |(addr, _)| {
+            stream::iter_ok::<_, Error>(peers.clone().into_iter()).map(move |(addr, _)| {
                 let send_peers = inner_state.random_peers(8);
                 let msg = MessageBuilder::new(MessageKind::KeepAlive)
                     .with_data(MessageInner::KeepAlive(send_peers))
@@ -143,30 +164,31 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
                 (msg, SocketAddr::V6(addr))
             })
         })
-        .flatten()
-        .map_err(|e| format!("Got error: {:?}", e).into());
+        .flatten();
 
     let (sock_send, sock_recv) = mpsc::channel::<(nano_lib_rs::message::Message, SocketAddr)>(2048);
-    // let process_send = sock_send.clone();
+    let process_send = sock_send.clone();
     let keepalive_send = sock_send.clone();
 
     handle.spawn(
-        process_handler
-            .map_err(|e| error!("Fatal error processing keepalives: {:?}", e))
+        process_send
+            .sink_map_err(|e| error!("Fatal error sending messages: {:?}", e))
+            .send_all(log_errors(process_handler)
+                .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
+            .map(|_| ())
     ).expect("Could not spawn tokio process");
 
     handle.spawn(
         keepalive_send
             .sink_map_err(|e| error!("Fatal sending keepalive: {:?}", e))
-            .send_all(
-                log_errors(keepalive_handler)
-                    .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
-                .map(|_| ())
+            .send_all(log_errors(keepalive_handler)
+                .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
+            .map(|_| ())
     ).expect("Could not spawn tokio process");
 
     Ok(sink
         .sink_map_err(|e| error!("Fatal error sending message: {:?}", e))
         .send_all(sock_recv)
-        .map(|_| ())
-        .map_err(|e| error!("Got error: {:?}", e)))
+        .map(|_| ()))
+        // .map_err(|e| error!("Got error: {:?}", e)))
 }
