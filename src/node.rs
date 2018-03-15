@@ -11,7 +11,7 @@ use futures::{Future};
 use futures::sync::mpsc;
 
 use std::net::{SocketAddr, SocketAddrV6};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use tokio_timer::*;
 use std::time::{Duration, Instant};
@@ -44,22 +44,22 @@ impl Default for PeerInfo {
 type Peers = IndexMap<SocketAddrV6, PeerInfo>;
 
 struct State {
-    pub peers: Mutex<Peers>
+    pub peers: RwLock<Peers>
 }
 
 impl State {
     pub fn new(initial_peers: Peers) -> Self {
         State {
-            peers: Mutex::new(initial_peers)
+            peers: RwLock::new(initial_peers)
         }
     }
 
     pub fn peer_count(&self) -> usize {
-        self.peers.lock().unwrap().len()
+        self.peers.read().unwrap().len()
     }
 
     pub fn add_peer(&self, peer: SocketAddrV6) -> bool {
-        let mut map = self.peers.lock().unwrap();
+        let mut map = self.peers.write().unwrap();
         match map.entry(peer) {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().last_seen = Instant::now();
@@ -74,7 +74,7 @@ impl State {
 
     pub fn random_peers(&self, n: usize) -> Vec<SocketAddrV6> {
         let mut rng = rand::thread_rng();
-        let peers = self.peers.lock().unwrap();
+        let peers = self.peers.read().unwrap();
         (0..n).into_iter().map(|_| {
             let idx = rng.gen_range::<usize>(0, peers.len());
             peers.get_index(idx).unwrap().0.clone()
@@ -156,9 +156,9 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
             let state = state_handle_keepalive.clone();
             let count = state.peer_count();
             info!("Sending keepalives to peers. Current peer count: {}", count);
-            let peers = state.peers.lock().unwrap();
+            let peers = state.peers.read().unwrap().clone();
             let inner_state = state.clone();
-            stream::iter_ok::<_, Error>(peers.clone().into_iter()).map(move |(addr, _)| {
+            stream::iter_ok::<_, Error>(peers.into_iter()).map(move |(addr, _)| {
                 let send_peers = inner_state.random_peers(8);
                 let msg = MessageBuilder::new(MessageKind::KeepAlive)
                     .with_data(MessageInner::KeepAlive(send_peers))
