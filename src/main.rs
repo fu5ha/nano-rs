@@ -90,6 +90,7 @@ fn setup_logger() -> Result<()> {
             ))
         })
         .level(log::LevelFilter::Debug)
+        .level_for("tokio_reactor", log::LevelFilter::Error)
         .chain(std::io::stderr())
         .chain(fern::log_file(format!("{}nano-rs__{}.log", base_path, chrono::Local::now().format("%Y-%m-%d__%H-%M-%S")))?)
         .apply()?;
