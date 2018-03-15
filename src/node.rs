@@ -126,20 +126,21 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
                         let to_send = peer_addrs.into_iter()
                             .filter_map(|peer_addr| {
                                 if state.add_peer(peer_addr) {
-                                    Some((msg.clone(), peer_addr))
+                                    Some((msg.clone(), SocketAddr::V6(peer_addr)))
                                 } else {
                                     None
                                 }
                             });
                         let count = state.peer_count();
                         info!("Added peers, new peer count: {}", count);
-                        Box::new(stream::iter_ok(to_send)) as _
+                        Box::new(stream::iter_ok(to_send))
+                    } else {
+                        info!("Malformed Keepalive, no peers added!");
+                        Box::new(stream::empty())
                     }
-                    info!("Malformed Keepalive, no peers added!");
-                    Box::new(stream::empty()) as _
                 },
                 _ => {
-                    Box::new(stream::empty()) as _
+                    Box::new(stream::empty())
                 }
             }
         })
