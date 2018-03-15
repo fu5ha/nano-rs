@@ -111,8 +111,8 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
 
     let state_handle_process = state.clone();
     
-    let process_handler = stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error>> {
-            let state = &state_handle_process;
+    let process_handler = stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
+            let state = state_handle_process.clone();
             let kind = msg.kind();
             let _ = state.add_peer(to_ipv6(addr));
             info!("Received message of kind: {:?} from {}", kind, addr);
@@ -123,9 +123,10 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
                         let msg = MessageBuilder::new(MessageKind::KeepAlive)
                             .with_data(MessageInner::KeepAlive(send_peers))
                             .build();
+                        let inner_state = state.clone();
                         let to_send = peer_addrs.into_iter()
-                            .filter_map(|peer_addr| {
-                                if state.add_peer(peer_addr) {
+                            .filter_map(move |peer_addr| {
+                                if inner_state.add_peer(peer_addr) {
                                     Some((msg.clone(), SocketAddr::V6(peer_addr)))
                                 } else {
                                     None
