@@ -44,13 +44,15 @@ impl Default for PeerInfo {
 type Peers = IndexMap<SocketAddrV6, PeerInfo>;
 
 struct State {
-    pub peers: RwLock<Peers>
+    peers: RwLock<Peers>,
+    inactive_peers: RwLock<Peers>,
 }
 
 impl State {
     pub fn new(initial_peers: Peers) -> Self {
         State {
-            peers: RwLock::new(initial_peers)
+            peers: RwLock::new(initial_peers),
+            inactive_peers: RwLock::new(IndexMap::new()),
         }
     }
 
@@ -58,8 +60,19 @@ impl State {
         self.peers.read().unwrap().len()
     }
 
-    pub fn add_peer(&self, peer: SocketAddrV6) -> bool {
+    pub fn add_or_update_peer(&self, peer: SocketAddrV6, force: bool) -> bool {
+        if !force {
+            let inactive_map = self.inactive_peers.read().unwrap();
+            if let Some(_) = inactive_map.get(&peer) {
+                return false;
+            }
+        }
+        let mut inactive_map = self.inactive_peers.write().unwrap();
         let mut map = self.peers.write().unwrap();
+        if let Entry::Occupied(entry) = inactive_map.entry(peer) {
+            map.insert(peer, *entry.get());
+            entry.remove();
+        }
         match map.entry(peer) {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().last_seen = Instant::now();
@@ -69,6 +82,21 @@ impl State {
                 entry.insert(PeerInfo::default());
                 true
             }
+        }
+    }
+
+    pub fn prune_peers(&mut self) {
+        let mut inactive_map = self.inactive_peers.write().unwrap();
+        let mut map = self.peers.write().unwrap();
+        let mut to_prune = Vec::new();
+        for (addr, info) in map.iter() {
+            if info.last_seen > Instant::now() - Duration::from_secs(KEEPALIVE_CUTOFF) {
+                to_prune.push(*addr);
+                inactive_map.insert(*addr, *info);
+            }
+        }
+        for addr in to_prune.iter() {
+            map.remove(addr);
         }
     }
 
@@ -114,7 +142,7 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
     let process_handler = stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
             let state = state_handle_process.clone();
             let kind = msg.kind();
-            let _ = state.add_peer(to_ipv6(addr));
+            let _ = state.add_or_update_peer(to_ipv6(addr), true);
             info!("Received message of kind: {:?} from {}", kind, addr);
             match msg.kind() {
                 MessageKind::KeepAlive => {
@@ -126,7 +154,7 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
                         let inner_state = state.clone();
                         let to_send = peer_addrs.into_iter()
                             .filter_map(move |peer_addr| {
-                                if inner_state.add_peer(peer_addr) {
+                                if inner_state.add_or_update_peer(peer_addr, false) {
                                     Some((msg.clone(), SocketAddr::V6(peer_addr)))
                                 } else {
                                     None
