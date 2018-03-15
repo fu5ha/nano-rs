@@ -1,12 +1,8 @@
 
 error_chain!{
     errors{
-        /// A recoverable error occurred while processing a stream
-        RecoverableStreamError {
-            description("A recoverable error occurred while processing a stream")
-            display("A recoverable error occurred while processing a stream")
-        }
         /// A non recoverable error occurred while processing a stream
+        #[allow(dead_code)]
         NonRecoverableStreamError {
             description("A non recoverable error occurred while processing a stream")
             display("A non recoverable error occurred while processing a stream")

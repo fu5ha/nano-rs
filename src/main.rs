@@ -1,6 +1,7 @@
 #![feature(conservative_impl_trait)]
 extern crate tokio;
 extern crate tokio_io;
+extern crate tokio_timer;
 #[macro_use]
 extern crate futures;
 
@@ -18,6 +19,9 @@ extern crate error_chain;
 
 extern crate bytes;
 
+extern crate rand;
+extern crate indexmap;
+
 mod error;
 mod net;
 mod utils;
@@ -28,15 +32,19 @@ use node::{NodeConfig};
 
 use nano_lib_rs::message::NetworkKind;
 
-use std::net::{ToSocketAddrs};
+use std::net::{ToSocketAddrs, SocketAddr};
 
-use tokio::prelude::*;
+use futures::{Future};
+use tokio::executor::thread_pool::*;
 
 fn run() -> Result<()> {
     info!("Starting nano-rs!");
 
     let listen_addr = "[::]:7075".parse()?;
-    let peers = "rai.raiblocks.net:7075".to_socket_addrs()?.collect();
+    let peers: Vec<SocketAddr> = "rai.raiblocks.net:7075".to_socket_addrs()?.collect();
+    if let None = peers.get(0) {
+        return Err("Could not connect to initial peer".into());
+    }
     let network = NetworkKind::Main;
 
     let config = NodeConfig {
@@ -45,12 +53,13 @@ fn run() -> Result<()> {
         listen_addr,
     };
 
-    let node = node::run(config);
-
-    tokio::run(
-        node
-        .map_err(|e| error!("Got error: {:?}", e))
-    );
+    let executor = ThreadPool::new();
+    {
+        let handle = executor.sender();
+        let node = node::run(config, &handle)?;
+        executor.spawn(node);
+    }
+    executor.shutdown().wait().unwrap();
 
     info!("Stopping nano-rs!");
     Ok(())
