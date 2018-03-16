@@ -7,7 +7,7 @@ use nano_lib_rs;
 use tokio::prelude::*;
 use tokio::executor::thread_pool::Sender;
 use tokio::net::{UdpSocket};
-use futures::{Future};
+use futures::{self, Future};
 use futures::sync::mpsc;
 
 use std::net::{SocketAddr, SocketAddrV6};
@@ -25,8 +25,9 @@ use error::*;
 use utils::log_errors;
 
 const KEEPALIVE_INTERVAL: u64 = 60;
-#[allow(dead_code)]
 const KEEPALIVE_CUTOFF: u64 = KEEPALIVE_INTERVAL * 5;
+
+const PEER_PRUNE_INTERVAL: u64 = KEEPALIVE_INTERVAL * 2;
 
 #[derive(Clone, Copy, Debug)]
 struct PeerInfo {
@@ -85,12 +86,12 @@ impl State {
         }
     }
 
-    pub fn prune_peers(&mut self) {
+    pub fn prune_peers(&self) -> usize {
         let mut inactive_map = self.inactive_peers.write().unwrap();
         let mut map = self.peers.write().unwrap();
         let mut to_prune = Vec::new();
         for (addr, info) in map.iter() {
-            if info.last_seen > Instant::now() - Duration::from_secs(KEEPALIVE_CUTOFF) {
+            if Instant::now() - info.last_seen > Duration::from_secs(KEEPALIVE_CUTOFF) {
                 to_prune.push(*addr);
                 inactive_map.insert(*addr, *info);
             }
@@ -98,6 +99,7 @@ impl State {
         for addr in to_prune.iter() {
             map.remove(addr);
         }
+        to_prune.len()
     }
 
     pub fn random_peers(&self, n: usize) -> Vec<SocketAddrV6> {
@@ -196,6 +198,15 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
         })
         .flatten();
 
+    let state_handle_peer_prune = state.clone();
+    let peer_prune_handler = timer.interval(Duration::from_secs(PEER_PRUNE_INTERVAL))
+        .for_each(move |_| {
+            let state = state_handle_peer_prune.clone();
+            let count = state.prune_peers();
+            info!("Pruned {} inactive peers.", count);
+            futures::future::ok(())
+        });
+
     let (sock_send, sock_recv) = mpsc::channel::<(nano_lib_rs::message::Message, SocketAddr)>(2048);
     let process_send = sock_send.clone();
     let keepalive_send = sock_send.clone();
@@ -216,9 +227,13 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
             .map(|_| ())
     ).expect("Could not spawn tokio process");
 
+    handle.spawn(
+        peer_prune_handler
+            .map_err(|e| error!("Error pruning peers: {}", e))
+    ).expect("Could not spawn tokio process");
+
     Ok(sink
         .sink_map_err(|e| error!("Fatal error sending message: {:?}", e))
         .send_all(sock_recv)
         .map(|_| ()))
-        // .map_err(|e| error!("Got error: {:?}", e)))
 }
