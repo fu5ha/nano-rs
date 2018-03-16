@@ -4,13 +4,14 @@ use net::{UdpFramed};
 use nano_lib_rs::message::{MessageBuilder, Message, MessageKind, MessageInner, NetworkKind};
 use nano_lib_rs;
 
+use tokio;
 use tokio::prelude::*;
-use tokio::executor::thread_pool::Sender;
 use tokio::net::{UdpSocket};
 use futures::{self, Future};
 use futures::sync::mpsc;
 
 use std::net::{SocketAddr, SocketAddrV6};
+use net2::UdpBuilder;
 use std::sync::{Arc, RwLock};
 
 use tokio_timer::*;
@@ -22,7 +23,7 @@ use rand::{self, Rng};
 
 use error::*;
 
-use utils::log_errors;
+use utils::{log_errors, check_addr};
 
 const KEEPALIVE_INTERVAL: u64 = 60;
 const KEEPALIVE_CUTOFF: u64 = KEEPALIVE_INTERVAL * 5;
@@ -80,8 +81,12 @@ impl State {
                 false
             },
             Entry::Vacant(entry) => {
-                entry.insert(PeerInfo::default());
-                true
+                if check_addr(peer) {
+                    entry.insert(PeerInfo::default());
+                    true
+                } else {
+                    false
+                }
             }
         }
     }
@@ -125,8 +130,11 @@ pub struct NodeConfig {
     pub network: NetworkKind,
 }
 
-pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (), Error = ()>> {
-    let socket = UdpSocket::bind(&config.listen_addr)?;
+pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl Future<Item = (), Error = ()>> {
+    let socket_std = UdpBuilder::new_v6()?
+        .only_v6(false)?
+        .bind(&config.listen_addr)?;
+    let socket = UdpSocket::from_std(socket_std, handle)?;
 
     info!("Listening on: {}", socket.local_addr()?);
 
@@ -210,30 +218,34 @@ pub fn run(config: NodeConfig, handle: &Sender) -> Result<impl Future<Item = (),
     let (sock_send, sock_recv) = mpsc::channel::<(nano_lib_rs::message::Message, SocketAddr)>(2048);
     let process_send = sock_send.clone();
     let keepalive_send = sock_send.clone();
+    
+    Ok(futures::future::lazy(||{
+        tokio::spawn(
+            process_send
+                .sink_map_err(|e| error!("Fatal error sending messages: {:?}", e))
+                .send_all(log_errors(process_handler)
+                    .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
+                .map(|_| ())
+        );
 
-    handle.spawn(
-        process_send
-            .sink_map_err(|e| error!("Fatal error sending messages: {:?}", e))
-            .send_all(log_errors(process_handler)
-                .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
-            .map(|_| ())
-    ).expect("Could not spawn tokio process");
+        tokio::spawn(
+            keepalive_send
+                .sink_map_err(|e| error!("Fatal sending keepalive: {:?}", e))
+                .send_all(log_errors(keepalive_handler)
+                    .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
+                .map(|_| ())
+        );
 
-    handle.spawn(
-        keepalive_send
-            .sink_map_err(|e| error!("Fatal sending keepalive: {:?}", e))
-            .send_all(log_errors(keepalive_handler)
-                .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
-            .map(|_| ())
-    ).expect("Could not spawn tokio process");
+        tokio::spawn(
+            peer_prune_handler
+                .map_err(|e| error!("Error pruning peers: {}", e))
+        );
 
-    handle.spawn(
-        peer_prune_handler
-            .map_err(|e| error!("Error pruning peers: {}", e))
-    ).expect("Could not spawn tokio process");
+        tokio::spawn(sink
+            .sink_map_err(|e| error!("Fatal error sending message: {:?}", e))
+            .send_all(sock_recv)
+            .map(|_| ()));
 
-    Ok(sink
-        .sink_map_err(|e| error!("Fatal error sending message: {:?}", e))
-        .send_all(sock_recv)
-        .map(|_| ()))
+        Ok(())
+    }))
 }

@@ -2,6 +2,7 @@
 extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_timer;
+extern crate net2;
 #[macro_use]
 extern crate futures;
 
@@ -35,7 +36,6 @@ use nano_lib_rs::message::NetworkKind;
 use std::net::{ToSocketAddrs, SocketAddr};
 
 use futures::{Future};
-use tokio::executor::thread_pool::*;
 
 fn run() -> Result<()> {
     info!("Starting nano-rs!");
@@ -53,13 +53,12 @@ fn run() -> Result<()> {
         listen_addr,
     };
 
-    let executor = ThreadPool::new();
-    {
-        let handle = executor.sender();
-        let node = node::run(config, &handle)?;
-        executor.spawn(node);
-    }
-    executor.shutdown().wait().unwrap();
+    let mut runtime = tokio::runtime::Runtime::new()?;
+    let handle = runtime.handle().clone();
+    let node = node::run(config, &handle)?;
+
+    runtime.spawn(node);
+    runtime.shutdown_on_idle().wait().unwrap();
 
     info!("Stopping nano-rs!");
     Ok(())
