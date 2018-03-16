@@ -7,7 +7,7 @@ repository = "https://github.com/termhn/nano-rs"
 [dependencies]
 tokio = "0.1"
 tokio-io = "0.1"
-tokio-timer = "0.1"
+tokio-timer = {git = "https://github.com/termhn/tokio-timer"}
 futures = "0.1"
 error-chain = "0.11"
 nano-lib-rs = {path = "./nano-lib-rs"}
