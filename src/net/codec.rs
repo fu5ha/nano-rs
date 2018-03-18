@@ -19,7 +19,10 @@ impl Decoder for MessageCodec {
         let bytes = Bytes::from(buf.take());
         let message = match Message::deserialize_bytes(bytes) {
             Ok(m) => m,
-            Err(_) => MessageBuilder::new(MessageKind::Invalid).build()
+            Err(e) => {
+                error!("Error deserializing message: {:?}", e);
+                MessageBuilder::new(MessageKind::Invalid).build()
+            }
         };
         Ok(Some(message))
     }

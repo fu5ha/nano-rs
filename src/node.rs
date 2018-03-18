@@ -117,17 +117,15 @@ impl State {
     }
 }
 
-fn process_messages<S>(state: Arc<State>, stream: S) -> impl Stream<Item=(Message, SocketAddr), Error=Error>
+fn process_messages<S>(network: NetworkKind, state: Arc<State>, stream: S) -> impl Stream<Item=(Message, SocketAddr), Error=Error>
     where S: Stream<Item=(Message, SocketAddr), Error=Error>
 {
     stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
+        if network == msg.header.network {
             let state = state.clone();
             let kind = msg.kind();
             let _ = state.add_or_update_peer(to_ipv6(addr), true);
-            // info!("Received message of kind: {:?} from {}", kind, addr);
-            if let MessageKind::Publish = kind {
-                info!("Received Publish from {}", addr);
-            }
+            debug!("Received message of kind: {:?} from {}", kind, addr);
             match kind {
                 MessageKind::KeepAlive => {
                     if let MessageInner::KeepAlive(peer_addrs) = msg.inner {
@@ -135,20 +133,19 @@ fn process_messages<S>(state: Arc<State>, stream: S) -> impl Stream<Item=(Messag
                         let msg = MessageBuilder::new(MessageKind::KeepAlive)
                             .with_data(MessageInner::KeepAlive(send_peers))
                             .build();
-                        let inner_state = state.clone();
                         let to_send = peer_addrs.into_iter()
                             .filter_map(move |peer_addr| {
-                                if inner_state.add_or_update_peer(peer_addr, false) {
+                                if check_addr(peer_addr) {
                                     Some((msg.clone(), SocketAddr::V6(peer_addr)))
                                 } else {
                                     None
                                 }
                             });
                         let count = state.peer_count();
-                        info!("Added peers, new peer count: {}", count);
+                        debug!("Added peers, new peer count: {}", count);
                         Box::new(stream::iter_ok(to_send))
                     } else {
-                        info!("Malformed Keepalive, no peers added!");
+                        debug!("Malformed Keepalive, no peers added!");
                         Box::new(stream::empty())
                     }
                 },
@@ -156,8 +153,12 @@ fn process_messages<S>(state: Arc<State>, stream: S) -> impl Stream<Item=(Messag
                     Box::new(stream::empty())
                 }
             }
-        })
-        .flatten()
+        } else {
+            debug!("Received message from {:?} network, ignoring...", msg.header.network);
+            Box::new(stream::empty())
+        }
+    })
+    .flatten()
 }
 
 fn send_keepalives(state: Arc<State>, timer: &Timer) -> impl Stream<Item=(Message, SocketAddr), Error=Error> {
@@ -166,7 +167,7 @@ fn send_keepalives(state: Arc<State>, timer: &Timer) -> impl Stream<Item=(Messag
         .map(move |_| {
             let state = state.clone();
             let count = state.peer_count();
-            info!("Sending keepalives to peers. Current peer count: {}", count);
+            debug!("Sending keepalives to peers. Current peer count: {}", count);
             let peers = state.peers.read().unwrap().clone();
             let inner_state = state.clone();
             stream::iter_ok::<_, Error>(peers.into_iter()).map(move |(addr, _)| {
@@ -185,7 +186,7 @@ fn prune_peers(state: Arc<State>, timer: &Timer) -> impl Future<Item=(), Error=T
         .for_each(move |_| {
             let state = state.clone();
             let count = state.prune_peers();
-            info!("Pruned {} inactive peers.", count);
+            debug!("Pruned {} inactive peers. Current peer count: {}", count, state.peer_count());
             futures::future::ok(())
         })
 }
@@ -214,7 +215,7 @@ pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl F
 
     let state = Arc::new(State::new(initial_peers));
 
-    let message_processor = process_messages(state.clone(), stream);
+    let message_processor = process_messages(config.network, state.clone(), stream);
 
     let timer = Timer::default();
     let keepalive_handler = send_keepalives(state.clone(), &timer);
