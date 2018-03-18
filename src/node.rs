@@ -14,7 +14,7 @@ use std::net::{SocketAddr, SocketAddrV6};
 use net2::UdpBuilder;
 use std::sync::{Arc, RwLock};
 
-use tokio_timer::*;
+use tokio_timer::{Timer, TimerError};
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
@@ -23,7 +23,7 @@ use rand::{self, Rng};
 
 use error::*;
 
-use utils::{log_errors, check_addr};
+use utils::{log_errors, check_addr, to_ipv6};
 
 const KEEPALIVE_INTERVAL: u64 = 60;
 const KEEPALIVE_CUTOFF: u64 = KEEPALIVE_INTERVAL * 5;
@@ -117,44 +117,18 @@ impl State {
     }
 }
 
-fn to_ipv6(addr: SocketAddr) -> SocketAddrV6 {
-    match addr {
-        SocketAddr::V4(addr) => SocketAddrV6::new(addr.ip().to_ipv6_mapped(), addr.port(), 0, 0),
-        SocketAddr::V6(addr) => addr,
-    }
-}
-
-pub struct NodeConfig {
-    pub peers: Vec<SocketAddr>,
-    pub listen_addr: SocketAddr,
-    pub network: NetworkKind,
-}
-
-pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl Future<Item = (), Error = ()>> {
-    let socket_std = UdpBuilder::new_v6()?
-        .only_v6(false)?
-        .bind(&config.listen_addr)?;
-    let socket = UdpSocket::from_std(socket_std, handle)?;
-
-    info!("Listening on: {}", socket.local_addr()?);
-
-    let (sink, stream) = UdpFramed::new(socket, MessageCodec::new()).split();
-
-    let initial_peers: IndexMap<SocketAddrV6, PeerInfo> = config.peers.into_iter()
-        .map(|addr| {
-            (to_ipv6(addr), PeerInfo::default())
-        }).collect();
-
-    let state = Arc::new(State::new(initial_peers));
-
-    let state_handle_process = state.clone();
-    
-    let process_handler = stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
-            let state = state_handle_process.clone();
+fn process_messages<S>(state: Arc<State>, stream: S) -> impl Stream<Item=(Message, SocketAddr), Error=Error>
+    where S: Stream<Item=(Message, SocketAddr), Error=Error>
+{
+    stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
+            let state = state.clone();
             let kind = msg.kind();
             let _ = state.add_or_update_peer(to_ipv6(addr), true);
-            info!("Received message of kind: {:?} from {}", kind, addr);
-            match msg.kind() {
+            // info!("Received message of kind: {:?} from {}", kind, addr);
+            if let MessageKind::Publish = kind {
+                info!("Received Publish from {}", addr);
+            }
+            match kind {
                 MessageKind::KeepAlive => {
                     if let MessageInner::KeepAlive(peer_addrs) = msg.inner {
                         let send_peers = state.random_peers(8);
@@ -183,15 +157,14 @@ pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl F
                 }
             }
         })
-        .flatten();
+        .flatten()
+}
 
-    let state_handle_keepalive = state.clone();
-
-    let timer = Timer::default();
-    let keepalive_handler = stream::once(Ok(()))
+fn send_keepalives(state: Arc<State>, timer: &Timer) -> impl Stream<Item=(Message, SocketAddr), Error=Error> {
+    stream::once(Ok(()))
         .chain(timer.interval(Duration::from_secs(KEEPALIVE_INTERVAL)))
         .map(move |_| {
-            let state = state_handle_keepalive.clone();
+            let state = state.clone();
             let count = state.peer_count();
             info!("Sending keepalives to peers. Current peer count: {}", count);
             let peers = state.peers.read().unwrap().clone();
@@ -204,16 +177,48 @@ pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl F
                 (msg, SocketAddr::V6(addr))
             })
         })
-        .flatten();
+        .flatten()
+}
 
-    let state_handle_peer_prune = state.clone();
-    let peer_prune_handler = timer.interval(Duration::from_secs(PEER_PRUNE_INTERVAL))
+fn prune_peers(state: Arc<State>, timer: &Timer) -> impl Future<Item=(), Error=TimerError> {
+    timer.interval(Duration::from_secs(PEER_PRUNE_INTERVAL))
         .for_each(move |_| {
-            let state = state_handle_peer_prune.clone();
+            let state = state.clone();
             let count = state.prune_peers();
             info!("Pruned {} inactive peers.", count);
             futures::future::ok(())
-        });
+        })
+}
+
+pub struct NodeConfig {
+    pub peers: Vec<SocketAddr>,
+    pub listen_addr: SocketAddr,
+    pub network: NetworkKind,
+}
+
+
+pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl Future<Item = (), Error = ()>> {
+    let socket_std = UdpBuilder::new_v6()?
+        .only_v6(false)?
+        .bind(&config.listen_addr)?;
+    let socket = UdpSocket::from_std(socket_std, handle)?;
+
+    info!("Listening on: {}", socket.local_addr()?);
+
+    let (sink, stream) = UdpFramed::new(socket, MessageCodec::new()).split();
+
+    let initial_peers: IndexMap<SocketAddrV6, PeerInfo> = config.peers.into_iter()
+        .map(|addr| {
+            (to_ipv6(addr), PeerInfo::default())
+        }).collect();
+
+    let state = Arc::new(State::new(initial_peers));
+
+    let message_processor = process_messages(state.clone(), stream);
+
+    let timer = Timer::default();
+    let keepalive_handler = send_keepalives(state.clone(), &timer);
+    let peer_prune_handler = prune_peers(state.clone(), &timer);
 
     let (sock_send, sock_recv) = mpsc::channel::<(nano_lib_rs::message::Message, SocketAddr)>(2048);
     let process_send = sock_send.clone();
@@ -223,7 +228,7 @@ pub fn run(config: NodeConfig, handle: &tokio::reactor::Handle) -> Result<impl F
         tokio::spawn(
             process_send
                 .sink_map_err(|e| error!("Fatal error sending messages: {:?}", e))
-                .send_all(log_errors(process_handler)
+                .send_all(log_errors(message_processor)
                     .map_err(|e| error!("Fatal error processing keepalives: {:?}", e)))
                 .map(|_| ())
         );

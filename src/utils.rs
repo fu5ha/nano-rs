@@ -54,7 +54,7 @@ const IPV4_RESERVED_ADDRESSES: &[(u32, u32)] = &[
     (0xf0000000, 0xffffffff), // rfc 6890
 ];
 
-use std::net::SocketAddrV6;
+use std::net::{SocketAddr, SocketAddrV6};
 
 pub fn check_addr(addr: SocketAddrV6) -> bool {
     let ip = addr.ip().clone();
@@ -78,3 +78,11 @@ pub fn check_addr(addr: SocketAddrV6) -> bool {
     }
     true
 }
+
+pub fn to_ipv6(addr: SocketAddr) -> SocketAddrV6 {
+    match addr {
+        SocketAddr::V4(addr) => SocketAddrV6::new(addr.ip().to_ipv6_mapped(), addr.port(), 0, 0),
+        SocketAddr::V6(addr) => addr,
+    }
+}
+
