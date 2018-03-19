@@ -1,4 +1,5 @@
-//! A custom version of tokio::net::UdpFramed that does not exit on send error
+//! A custom version of tokio::net::UdpFramed that does not exit on send error and
+//! which contains a reference to a `State` object
 use std::net::{SocketAddr, Ipv4Addr, SocketAddrV4};
 
 use futures::{Async, Poll, Stream, Sink, StartSend, AsyncSink};
@@ -7,6 +8,10 @@ use tokio::net::UdpSocket;
 
 use tokio_io::codec::{Decoder, Encoder};
 use bytes::{BytesMut, BufMut};
+
+use std::sync::Arc;
+use node::state::State;
+use utils::to_ipv6;
 
 /// A unified `Stream` and `Sink` interface to an underlying `UdpSocket`, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
@@ -33,6 +38,7 @@ pub struct UdpFramed<C> {
     wr: BytesMut,
     out_addr: SocketAddr,
     flushed: bool,
+    node_state: Arc<State>,
 }
 
 impl<C: Decoder> Stream for UdpFramed<C> {
@@ -99,14 +105,15 @@ impl<C: Encoder> Sink for UdpFramed<C> {
                 self.flushed = true;
 
                 if !wrote_all {
-                    error!("Failed to write entire datagram to socket! Wrote: {} length: {}", n, self.wr.len());
+                    debug!("Failed to write entire datagram to socket; Wrote: {} expected: {}", n, self.wr.len());
                 }
             },
             Err(e) => {
                 if e.kind() == ::std::io::ErrorKind::WouldBlock {
                     return Ok(Async::NotReady);
                 }
-                error!("Error sending frame: {:?}", e);
+                debug!("Error sending frame: {:?}, removing peer: {}", e, self.out_addr);
+                self.node_state.remove_peer(to_ipv6(self.out_addr));
             }
         }
         Ok(Async::Ready(()))
@@ -125,7 +132,7 @@ impl<C> UdpFramed<C> {
     /// Create a new `UdpFramed` backed by the given socket and codec.
     ///
     /// See struct level documention for more details.
-    pub fn new(socket: UdpSocket, codec: C) -> UdpFramed<C> {
+    pub fn new(socket: UdpSocket, codec: C, state: Arc<State>) -> UdpFramed<C> {
         UdpFramed {
             socket: socket,
             codec: codec,
@@ -133,6 +140,7 @@ impl<C> UdpFramed<C> {
             rd: BytesMut::with_capacity(INITIAL_RD_CAPACITY),
             wr: BytesMut::with_capacity(INITIAL_WR_CAPACITY),
             flushed: true,
+            node_state: state,
         }
     }
 

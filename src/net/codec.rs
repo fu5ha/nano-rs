@@ -35,7 +35,7 @@ impl Encoder for MessageCodec {
 
     fn encode(&mut self, msg: Message, dst: &mut BytesMut) -> Result<()> {
         let msg_ser = msg.serialize_bytes()?;
-        println!("Serialized message: {:?}", &msg_ser[..]);
+        trace!("Serialized message: {:?}", &msg_ser[..]);
         dst.reserve(msg_ser.len());
         dst.put(msg_ser);
         Ok(())
