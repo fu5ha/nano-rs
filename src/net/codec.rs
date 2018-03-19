@@ -35,7 +35,7 @@ impl Encoder for MessageCodec {
 
     fn encode(&mut self, msg: Message, dst: &mut BytesMut) -> Result<()> {
         let msg_ser = msg.serialize_bytes()?;
-        trace!("Serialized message: {:?}", &msg_ser[..]);
+        println!("Serialized message: {:?}", &msg_ser[..]);
         dst.reserve(msg_ser.len());
         dst.put(msg_ser);
         Ok(())
@@ -49,7 +49,8 @@ mod tests {
     use data_encoding::{HEXUPPER};
     use std::net::SocketAddrV6;
     use nano_lib_rs::message::{MessagePayload};
-    use nano_lib_rs::block::{Block, BlockPayload, BlockKind, BlockHash};
+    use nano_lib_rs::block::{Block, BlockPayload, BlockKind, BlockHash, Work};
+    use nano_lib_rs::keys::Signature;
 
     #[test]
     fn encode_decode() {
@@ -64,13 +65,23 @@ mod tests {
         let res = a_codec.decode(&mut buf).unwrap().expect("should decode keepalive");
         assert_eq!(message, res);
 
-        let dummy_data = [0u8; 32];
+        let mut dummy_data = [82u8; 64];
+        for (i, byte) in dummy_data.iter_mut().enumerate() {
+            if i%2 == 0 {
+                *byte = 64;
+            }
+            if i%3 == 0 {
+                *byte = 25;
+            }
+        }
         let block = Block::new(
             BlockKind::Receive,
             Some(BlockPayload::Receive {
-                previous: BlockHash::from_bytes(dummy_data).unwrap(),
-                source: BlockHash::from_bytes(dummy_data).unwrap(),
-            }));
+                previous: BlockHash::from_bytes(&dummy_data[..32]).unwrap(),
+                source: BlockHash::from_bytes(&dummy_data[..32]).unwrap(),
+            }),
+            Some(Signature::from_bytes(&dummy_data).unwrap()),
+            Some(Work::from_bytes(&dummy_data[..8]).unwrap()));
         let message = MessageBuilder::new(MessageKind::Publish)
             .with_block_kind(BlockKind::Receive)
             .with_payload(MessagePayload::Publish(block))

@@ -1,5 +1,5 @@
 extern crate nanopow_rs;
-use nanopow_rs::{InputHash, Work};
+pub use nanopow_rs::{InputHash, Work};
 
 use byteorder::{BigEndian, ByteOrder};
 
@@ -12,6 +12,8 @@ use keys::{SecretKey, PublicKey, Signature, SIGNATURE_LENGTH};
 use error::*;
 
 use data_encoding::HEXUPPER;
+
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockHash([u8; 32]);
@@ -185,7 +187,17 @@ impl Block {
     }
     pub fn serialize_bytes(&self) -> Bytes {
         if let Some(ref p) = self.payload {
-            p.serialize_bytes()
+            let mut buf = BytesMut::new();
+            p.serialize_bytes(&mut buf);
+            if let Some(ref s) = self.signature {
+                buf.reserve(SIGNATURE_LENGTH);
+                buf.put_slice(&s.to_bytes());
+            }
+            if let Some(ref w) = self.work {
+                buf.reserve(8);
+                buf.put_slice(w.as_ref());
+            }
+            Bytes::from(buf)
         } else {
             Bytes::with_capacity(0)
         }
@@ -342,8 +354,7 @@ impl BlockPayload {
         }
     }
 
-    pub fn serialize_bytes(&self) -> Bytes {
-        let mut buf = BytesMut::new();
+    pub fn serialize_bytes(&self, buf: &mut BytesMut) {
         match *self {
             BlockPayload::Send {
                 ref previous,
@@ -396,7 +407,6 @@ impl BlockPayload {
                 buf.put_slice(link.as_bytes());
             }
         }
-        Bytes::from(buf)
     }
 
     pub fn deserialize_bytes<B: BufExt>(buf: &mut B, kind: BlockKind) -> Result<Self> {

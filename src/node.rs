@@ -136,7 +136,7 @@ fn process_messages<S>(network: NetworkKind, state: Arc<State>, stream: S) -> im
                             format!("Error calculating hash for block: {}", e)
                         }
                     };
-                    info!("Got block of kind: {:?} with hash: {}", block.kind, hash);
+                    info!("Got {:?} block with hash {}, data: {:?}", block.kind, hash, block);
                 },
                 _ => {}
             }
