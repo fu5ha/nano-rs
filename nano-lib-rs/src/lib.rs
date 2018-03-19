@@ -19,6 +19,8 @@ extern crate serde_derive;
 extern crate serde_json;
 
 extern crate blake2;
+extern crate ed25519_dalek;
+
 extern crate bytes;
 extern crate data_encoding;
 

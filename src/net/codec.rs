@@ -16,11 +16,12 @@ impl Decoder for MessageCodec {
     type Error = Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>> {
+        trace!("Deserializing message: {:?}", &buf[..]);
         let bytes = Bytes::from(buf.take());
         let message = match Message::deserialize_bytes(bytes) {
             Ok(m) => m,
             Err(e) => {
-                error!("Error deserializing message: {:?}", e);
+                error!("Error deserializing message: {}", e);
                 MessageBuilder::new(MessageKind::Invalid).build()
             }
         };
@@ -32,8 +33,8 @@ impl Encoder for MessageCodec {
     type Item = Message;
     type Error = Error;
 
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<()> {
-        let msg_ser = item.serialize_bytes()?;
+    fn encode(&mut self, msg: Message, dst: &mut BytesMut) -> Result<()> {
+        let msg_ser = msg.serialize_bytes()?;
         trace!("Serialized message: {:?}", &msg_ser[..]);
         dst.reserve(msg_ser.len());
         dst.put(msg_ser);
@@ -47,19 +48,36 @@ mod tests {
     use bytes::{BytesMut};
     use data_encoding::{HEXUPPER};
     use std::net::SocketAddrV6;
-    use nano_lib_rs::message::{MessageInner};
+    use nano_lib_rs::message::{MessagePayload};
+    use nano_lib_rs::block::{Block, BlockPayload, BlockKind, BlockHash};
 
     #[test]
     fn encode_decode() {
-        let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
+        let addr: SocketAddrV6 = "[::]:7075".parse().unwrap();
         let message = MessageBuilder::new(MessageKind::KeepAlive)
-            .with_data(MessageInner::KeepAlive(vec![sock.clone(); 8]))
+            .with_payload(MessagePayload::KeepAlive(vec![addr.clone(); 8]))
             .build();
         let mut buf = BytesMut::new();
         let mut a_codec = MessageCodec::new();
 
-        a_codec.encode(message.clone(), &mut buf).expect("should encode");
-        let res = a_codec.decode(&mut buf).unwrap().expect("should decode");
+        a_codec.encode(message.clone(), &mut buf).expect("should encode keepalive");
+        let res = a_codec.decode(&mut buf).unwrap().expect("should decode keepalive");
+        assert_eq!(message, res);
+
+        let dummy_data = [0u8; 32];
+        let block = Block::new(
+            BlockKind::Receive,
+            Some(BlockPayload::Receive {
+                previous: BlockHash::from_bytes(dummy_data).unwrap(),
+                source: BlockHash::from_bytes(dummy_data).unwrap(),
+            }));
+        let message = MessageBuilder::new(MessageKind::Publish)
+            .with_block_kind(BlockKind::Receive)
+            .with_payload(MessagePayload::Publish(block))
+            .build();
+        
+        a_codec.encode(message.clone(), &mut buf).expect("should encode publish");
+        let res = a_codec.decode(&mut buf).unwrap().expect("should decode publish");
         assert_eq!(message, res);
     }
 
@@ -81,6 +99,6 @@ mod tests {
         
         let res = codec.decode(&mut buf).unwrap().expect("should decode");
         assert_eq!(res.kind(), MessageKind::KeepAlive);
-        assert_eq!(res.inner, MessageInner::Invalid);
+        assert_eq!(res.payload, MessagePayload::Invalid);
     }
 }

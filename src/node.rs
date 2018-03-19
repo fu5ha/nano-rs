@@ -1,7 +1,7 @@
 use net::codec::MessageCodec;
 use net::{UdpFramed};
 
-use nano_lib_rs::message::{MessageBuilder, Message, MessageKind, MessageInner, NetworkKind};
+use nano_lib_rs::message::{MessageBuilder, Message, MessageKind, MessagePayload, NetworkKind};
 use nano_lib_rs;
 
 use tokio;
@@ -120,18 +120,32 @@ impl State {
 fn process_messages<S>(network: NetworkKind, state: Arc<State>, stream: S) -> impl Stream<Item=(Message, SocketAddr), Error=Error>
     where S: Stream<Item=(Message, SocketAddr), Error=Error>
 {
-    stream.map(move |(msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
+    stream.map(move |(mut msg, addr)| -> Box<Stream<Item=(Message, SocketAddr), Error=Error> + Send> {
         if network == msg.header.network {
             let state = state.clone();
             let kind = msg.kind();
             let _ = state.add_or_update_peer(to_ipv6(addr), true);
             debug!("Received message of kind: {:?} from {}", kind, addr);
+            match msg.payload {
+                MessagePayload::Publish(ref mut block) | MessagePayload::ConfirmReq(ref mut block) => {
+                    let hash = match block.hash(false) {
+                        Ok(hash) => {
+                            hash.into()
+                        },
+                        Err(e) => {
+                            format!("Error calculating hash for block: {}", e)
+                        }
+                    };
+                    info!("Got block of kind: {:?} with hash: {}", block.kind, hash);
+                },
+                _ => {}
+            }
             match kind {
                 MessageKind::KeepAlive => {
-                    if let MessageInner::KeepAlive(peer_addrs) = msg.inner {
+                    if let MessagePayload::KeepAlive(peer_addrs) = msg.payload {
                         let send_peers = state.random_peers(8);
                         let msg = MessageBuilder::new(MessageKind::KeepAlive)
-                            .with_data(MessageInner::KeepAlive(send_peers))
+                            .with_payload(MessagePayload::KeepAlive(send_peers))
                             .build();
                         let to_send = peer_addrs.into_iter()
                             .filter_map(move |peer_addr| {
@@ -173,7 +187,7 @@ fn send_keepalives(state: Arc<State>, timer: &Timer) -> impl Stream<Item=(Messag
             stream::iter_ok::<_, Error>(peers.into_iter()).map(move |(addr, _)| {
                 let send_peers = inner_state.random_peers(8);
                 let msg = MessageBuilder::new(MessageKind::KeepAlive)
-                    .with_data(MessageInner::KeepAlive(send_peers))
+                    .with_payload(MessagePayload::KeepAlive(send_peers))
                     .build();
                 (msg, SocketAddr::V6(addr))
             })

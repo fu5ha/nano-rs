@@ -3,12 +3,12 @@ use nanopow_rs::{InputHash, Work};
 
 use byteorder::{BigEndian, ByteOrder};
 
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{Bytes, BytesMut, BufMut, Buf, IntoBuf};
 use blake2::Blake2b;
 use blake2::digest::{Input, VariableOutput};
 
 use hash::{Hash, Hasher};
-use keys::{PrivateKey, PublicKey};
+use keys::{SecretKey, PublicKey, Signature, SIGNATURE_LENGTH};
 use error::*;
 
 use data_encoding::HEXUPPER;
@@ -42,17 +42,16 @@ impl BlockHash {
         }
         Ok(BlockHash(buf))
     }
+
+    /// View the hash as a byte slice
+    pub fn as_bytes<'a>(&'a self) -> &'a [u8; 32] {
+        &(self.0)
+    }
 }
 
 impl Hash for BlockHash {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(&self.0[..])
-    }
-}
-
-impl AsRef<[u8]> for BlockHash {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
     }
 }
 
@@ -69,58 +68,14 @@ impl From<BlockHash> for InputHash {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Signature([u8; 32]);
-
-impl Signature {
-    /// Convert hexadecimal formatted data into an InputHash
-    pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
-        let bytes = s.as_ref();
-        if bytes.len() != 64 {
-            bail!(ErrorKind::BlockHashLengthError);
-        }
-        let mut buf = [0u8; 32];
-        let _ = HEXUPPER
-            .decode_mut(bytes, &mut buf)
-            .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
-        Ok(Signature(buf))
-    }
-
-    /// Create an InputHash from a raw byte slice
-    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self> {
-        let bytes = bytes.as_ref();
-        if bytes.len() != 32 {
-            bail!(ErrorKind::SignatureLengthError);
-        }
-        let mut buf = [0u8; 32];
-        for i in 0..32 {
-            buf[i] = bytes[i];
-        }
-        Ok(Signature(buf))
-    }
-}
-
-impl AsRef<[u8]> for Signature {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl From<Signature> for String {
-    fn from(sig: Signature) -> Self {
-        let string = HEXUPPER.encode(&sig.0);
-        string
-    }
-}
-
 enum_byte!(BlockKind {
-    Invalid = 0,
-    NotABlock = 1,
-    Send = 2,
-    Receive = 3,
-    Open = 4,
-    Change = 5,
-    Utx = 6,
+    Invalid = 0x00,
+    NotABlock = 0x01,
+    Send = 0x02,
+    Receive = 0x03,
+    Open = 0x04,
+    Change = 0x05,
+    Utx = 0x06,
 });
 
 impl BlockKind {
@@ -140,7 +95,7 @@ impl BlockKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub kind: BlockKind,
-    pub inner: BlockInner,
+    pub payload: Option<BlockPayload>,
     pub next: Option<BlockHash>,
     pub work: Option<Work>,
     pub signature: Option<Signature>,
@@ -148,41 +103,70 @@ pub struct Block {
 }
 
 impl Block {
+    pub fn new(kind: BlockKind, payload: Option<BlockPayload>, signature: Option<Signature>, work: Option<Work>) -> Self {
+        Block {
+            kind,
+            payload,
+            next: None,
+            work,
+            signature,
+            hash: None,
+        }
+    }
     pub fn next(&self) -> Option<BlockHash> {
         self.next
     }
     pub fn signature(&self) -> Option<Signature> {
         self.signature
     }
-    pub fn sign(&mut self, _key: &PrivateKey) -> Result<()> {
+    pub fn sign(&mut self, _key: &SecretKey) -> Result<()> {
         unimplemented!();
     }
     pub fn work(&self) -> Option<Work> {
         self.work.clone()
     }
     pub fn set_work(&mut self, work: Work) -> Result<()> {
-        if !self.check_work(&work) {
-            bail!(ErrorKind::InvalidWorkError);
+        if let Some(ref p) = self.payload {
+            let valid = nanopow_rs::check_work(&p.work_source(), &work);
+            if valid {
+                bail!(ErrorKind::InvalidWorkError);
+            }
+            self.work = Some(work);
+            Ok(())
+        } else {
+            bail!("Cannot set work for a block with no payload");
         }
-        self.work = Some(work);
-        Ok(())
     }
-    pub fn generate_work(&mut self) {
-        let work = nanopow_rs::generate_work(&self.inner.work_source().into(), None);
-        self.work = work;
+    pub fn generate_work(&mut self) -> Option<Work> {
+        if let Some(ref p) = self.payload {
+            let work = nanopow_rs::generate_work(&p.work_source(), None);
+            self.work = work;
+            work
+        } else {
+            None
+        }
     }
-    pub fn check_work(&self, work: &Work) -> bool {
-        nanopow_rs::check_work(&self.inner.work_source().into(), work)
+    pub fn verify_work(&self) -> Result<bool> {
+        if let Some(ref p) = self.payload {
+            if let Some(ref w) = self.work {
+                return Ok(nanopow_rs::check_work(&p.work_source(), w))
+            }
+        }
+        bail!(ErrorKind::NoWorkError);
     }
     pub fn cached_hash(&self) -> Option<BlockHash> {
         self.hash
     }
     pub fn calculate_hash(&mut self) -> Result<BlockHash> {
-        let mut hasher = BlockHasher::new();
-        self.inner.hash(&mut hasher);
-        let hash = hasher.finish()?;
-        self.hash = Some(hash);
-        Ok(hash)
+        if let Some(ref p) = self.payload {
+            let mut hasher = BlockHasher::new();
+            p.hash(&mut hasher);
+            let hash = hasher.finish()?;
+            self.hash = Some(hash);
+            Ok(hash)
+        } else {
+            bail!("Cannot calculate hash for block without payload")
+        }
     }
     pub fn is_signed(&self) -> bool {
         self.signature().is_some()
@@ -200,7 +184,35 @@ impl Block {
         self.calculate_hash()
     }
     pub fn serialize_bytes(&self) -> Bytes {
-        self.inner.serialize_bytes()
+        if let Some(ref p) = self.payload {
+            p.serialize_bytes()
+        } else {
+            Bytes::with_capacity(0)
+        }
+    }
+    pub fn deserialize_bytes(bytes: Bytes, kind: BlockKind) -> Result<Self> {
+        Ok(match kind {
+            BlockKind::Invalid | BlockKind::NotABlock => {
+                Block::new(kind, None, None, None)
+            },
+            _ => {
+                let len = bytes.len();
+                if len < kind.size() + SIGNATURE_LENGTH {
+                    bail!(ErrorKind::BlockParseError(BlockParseErrorKind::NoSignature));
+                } else if len < kind.size() + SIGNATURE_LENGTH + 8 {
+                    bail!(ErrorKind::BlockParseError(BlockParseErrorKind::NoWork));
+                }
+                let mut buf = bytes.into_buf();
+                let payload = BlockPayload::deserialize_bytes(&mut buf, kind)?;
+                let mut sig_buf = [0u8; 64];
+                buf.copy_to_slice(&mut sig_buf);
+                let signature = Signature::from_bytes(&sig_buf)?;
+                let mut work_buf = [0u8; 8];
+                buf.copy_to_slice(&mut work_buf);
+                let work = Work::from_bytes(&work_buf)?;
+                Block::new(kind, Some(payload), Some(signature), Some(work))
+            }
+        })
     }
 }
 
@@ -231,8 +243,60 @@ impl Hasher for BlockHasher {
     }
 }
 
+pub trait BufMutExt: BufMut {
+    fn put_i128<T: ByteOrder>(&mut self, n: i128) {
+        let mut buf = [0u8; 16];
+        T::write_i128(&mut buf, n);
+        self.put_slice(&buf)
+    }
+
+    fn put_u128<T: ByteOrder>(&mut self, n: u128) {
+        let mut buf = [0u8; 16];
+        T::write_u128(&mut buf, n);
+        self.put_slice(&buf)
+    }
+}
+
+impl<T: BufMut> BufMutExt for T {}
+
+pub trait BufExt: Buf {
+    fn get_u128<T: ByteOrder>(&mut self) -> u128 {
+        let mut buf = [0; 16];
+        self.copy_to_slice(&mut buf);
+        T::read_u128(&buf)
+    }
+
+    fn get_i128<T: ByteOrder>(&mut self) -> i128 {
+        let mut buf = [0; 16];
+        self.copy_to_slice(&mut buf);
+        T::read_i128(&buf)
+    }
+}
+
+impl<T: Buf> BufExt for T {}
+
+
+/// Link field contains source block_hash if receiving, destination account if sending
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Link {
+    Source(BlockHash),
+    Destination(PublicKey),
+    Unknown([u8; 32])
+}
+
+// TODO: Process Link properly so that we can remove unkown type
+impl Link {
+    pub fn as_bytes<'a>(&'a self) -> &'a [u8; 32] {
+        match *self {
+            Link::Source(ref h) => h.as_bytes(),
+            Link::Destination(ref k) => k.as_bytes(),
+            Link::Unknown(ref b) => &b
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum BlockInner {
+pub enum BlockPayload {
     Send {
         previous: BlockHash,
         destination: PublicKey,
@@ -263,63 +327,61 @@ pub enum BlockInner {
         previous: BlockHash,
         representative: PublicKey,
         balance: u128,
-        /// Link field contains source block_hash if receiving, destination account if sending
-        link: [u8; 32],
+        link: Link,
     },
 }
 
-impl BlockInner {
+impl BlockPayload {
     pub fn work_source(&self) -> InputHash {
         match *self {
-            BlockInner::Send { ref previous, .. } => previous.clone().into(),
-            BlockInner::Receive { ref previous, .. } => previous.clone().into(),
-            BlockInner::Open { ref account, .. } => account.clone().into(),
-            BlockInner::Change { ref previous, .. } => previous.clone().into(),
-            BlockInner::Utx { ref previous, .. } => previous.clone().into(),
+            BlockPayload::Send { ref previous, .. } => previous.clone().into(),
+            BlockPayload::Receive { ref previous, .. } => previous.clone().into(),
+            BlockPayload::Open { ref account, .. } => InputHash::from_bytes(account.clone().to_bytes()).unwrap(),
+            BlockPayload::Change { ref previous, .. } => previous.clone().into(),
+            BlockPayload::Utx { ref previous, .. } => previous.clone().into(),
         }
     }
+
     pub fn serialize_bytes(&self) -> Bytes {
         let mut buf = BytesMut::new();
         match *self {
-            BlockInner::Send {
+            BlockPayload::Send {
                 ref previous,
                 ref destination,
                 ref balance,
             } => {
                 buf.reserve(BlockKind::Send.size());
-                buf.put(previous.as_ref());
-                buf.put(destination.as_ref());
-                let mut bal_buf = [0u8; 16];
-                BigEndian::write_u128(&mut bal_buf, *balance);
-                buf.put(&bal_buf[..]);
+                buf.put_slice(previous.as_bytes());
+                buf.put_slice(destination.as_bytes());
+                buf.put_u128::<BigEndian>(*balance);
             }
-            BlockInner::Receive {
+            BlockPayload::Receive {
                 ref previous,
                 ref source,
             } => {
                 buf.reserve(BlockKind::Receive.size());
-                buf.put(previous.as_ref());
-                buf.put(source.as_ref());
+                buf.put_slice(previous.as_bytes());
+                buf.put_slice(source.as_bytes());
             }
-            BlockInner::Open {
+            BlockPayload::Open {
                 ref source,
                 ref representative,
                 ref account,
             } => {
                 buf.reserve(BlockKind::Open.size());
-                buf.put(source.as_ref());
-                buf.put(representative.as_ref());
-                buf.put(account.as_ref());
+                buf.put_slice(source.as_bytes());
+                buf.put_slice(representative.as_bytes());
+                buf.put_slice(account.as_bytes());
             }
-            BlockInner::Change {
+            BlockPayload::Change {
                 ref previous,
                 ref representative,
             } => {
                 buf.reserve(BlockKind::Change.size());
-                buf.put(previous.as_ref());
-                buf.put(representative.as_ref());
+                buf.put_slice(previous.as_bytes());
+                buf.put_slice(representative.as_bytes());
             }
-            BlockInner::Utx {
+            BlockPayload::Utx {
                 ref account,
                 ref previous,
                 ref representative,
@@ -327,26 +389,91 @@ impl BlockInner {
                 ref link,
             } => {
                 buf.reserve(BlockKind::Utx.size());
-                let mut block_kind_code = [0u8; 32];
-                block_kind_code[31] = BlockKind::Utx as u8;
-                buf.put(&block_kind_code[..]);
-                buf.put(account.as_ref());
-                buf.put(previous.as_ref());
-                buf.put(representative.as_ref());
-                let mut bal_buf = [0u8; 16];
-                BigEndian::write_u128(&mut bal_buf, *balance);
-                buf.put(&bal_buf[..]);
-                buf.put(&link[..]);
+                buf.put_slice(account.as_bytes());
+                buf.put_slice(previous.as_bytes());
+                buf.put_slice(representative.as_bytes());
+                buf.put_u128::<BigEndian>(*balance);
+                buf.put_slice(link.as_bytes());
             }
         }
         Bytes::from(buf)
     }
+
+    pub fn deserialize_bytes<B: BufExt>(buf: &mut B, kind: BlockKind) -> Result<Self> {
+        Ok(match kind {
+            BlockKind::Send => {
+                if buf.remaining() < BlockKind::Send.size() {
+                    bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
+                }
+                let mut temp_buf = [0u8; 32];
+                buf.copy_to_slice(&mut temp_buf);
+                let previous = BlockHash::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let destination = PublicKey::from_bytes(&temp_buf)?;
+                let balance = buf.get_u128::<BigEndian>();
+                BlockPayload::Send { previous, destination, balance }
+            }
+            BlockKind::Receive => {
+                if buf.remaining() < BlockKind::Receive.size() {
+                    bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
+                }
+                let mut temp_buf = [0u8; 32];
+                buf.copy_to_slice(&mut temp_buf);
+                let previous = BlockHash::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let source = BlockHash::from_bytes(&temp_buf)?;
+                BlockPayload::Receive { previous, source }
+            }
+            BlockKind::Open => {
+                if buf.remaining() < BlockKind::Open.size() {
+                    bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
+                }
+                let mut temp_buf = [0u8; 32];
+                buf.copy_to_slice(&mut temp_buf);
+                let source = BlockHash::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let representative = PublicKey::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let account = PublicKey::from_bytes(&temp_buf)?;
+                BlockPayload::Open { source, representative, account }
+            }
+            BlockKind::Change => {
+                if buf.remaining() < BlockKind::Change.size() {
+                    bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
+                }
+                let mut temp_buf = [0u8; 32];
+                buf.copy_to_slice(&mut temp_buf);
+                let previous = BlockHash::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let representative = PublicKey::from_bytes(&temp_buf)?;
+                BlockPayload::Change { previous, representative }
+            }
+            BlockKind::Utx => {
+                if buf.remaining() < BlockKind::Utx.size() {
+                    bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
+                }
+                let mut temp_buf = [0u8; 32];
+                buf.copy_to_slice(&mut temp_buf);
+                let account = PublicKey::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let previous = BlockHash::from_bytes(&temp_buf)?;
+                buf.copy_to_slice(&mut temp_buf);
+                let representative = PublicKey::from_bytes(&temp_buf)?;
+                let balance = buf.get_u128::<BigEndian>();
+                buf.copy_to_slice(&mut temp_buf);
+                // TODO: Process link properly
+                let link = Link::Unknown(temp_buf);
+                BlockPayload::Utx { account, previous, representative, balance, link }
+            }
+            _ => bail!(ErrorKind::InvalidBlockPayloadKindError(kind))
+        })
+    }
 }
 
-impl Hash for BlockInner {
+impl Hash for BlockPayload {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match *self {
-            BlockInner::Send {
+            BlockPayload::Send {
                 ref previous,
                 ref destination,
                 ref balance,
@@ -357,14 +484,14 @@ impl Hash for BlockInner {
                 BigEndian::write_u128(&mut buf, *balance);
                 state.write(&buf);
             }
-            BlockInner::Receive {
+            BlockPayload::Receive {
                 ref previous,
                 ref source,
             } => {
                 previous.hash(state);
                 source.hash(state);
             }
-            BlockInner::Open {
+            BlockPayload::Open {
                 ref source,
                 ref representative,
                 ref account,
@@ -373,14 +500,14 @@ impl Hash for BlockInner {
                 representative.hash(state);
                 account.hash(state);
             }
-            BlockInner::Change {
+            BlockPayload::Change {
                 ref previous,
                 ref representative,
             } => {
                 previous.hash(state);
                 representative.hash(state);
             }
-            BlockInner::Utx {
+            BlockPayload::Utx {
                 ref account,
                 ref previous,
                 ref representative,
@@ -395,7 +522,7 @@ impl Hash for BlockInner {
                 let mut buf = [0u8; 16];
                 BigEndian::write_u128(&mut buf, *balance);
                 state.write(&buf);
-                state.write(link);
+                state.write(link.as_bytes());
             }
         }
     }

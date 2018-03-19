@@ -1,10 +1,10 @@
 use bytes::{Bytes, BytesMut, BufMut, Buf, IntoBuf, LittleEndian};
 use bincode;
 use error::*;
-use block::{BlockKind, Block, Signature};
+use block::{BlockKind, Block};
 use std::net::{SocketAddrV6, Ipv6Addr};
 use std::cmp;
-use keys::PublicKey;
+use keys::{PublicKey, Signature, SIGNATURE_LENGTH};
 
 enum_byte!(MessageKind {
     Invalid = 0x00,
@@ -62,12 +62,12 @@ pub struct MessageHeader {
     pub version_using: Version,
     pub version_min: Version,
     pub kind: MessageKind,
-    pub block_kind: BlockKind,
     pub extensions: Extensions,
+    pub block_kind: BlockKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageInner {
+pub enum MessagePayload {
     Invalid,
     KeepAlive(Vec<SocketAddrV6>),
     Publish(Block),
@@ -80,13 +80,13 @@ pub enum MessageInner {
     }
 }
 
-impl MessageInner {
+impl MessagePayload {
     pub fn serialize_bytes(&self) -> Bytes {
         match *self {
-            MessageInner::Invalid => {
+            MessagePayload::Invalid => {
                 Bytes::with_capacity(0)
             },
-            MessageInner::KeepAlive(ref peers) => {
+            MessagePayload::KeepAlive(ref peers) => {
                 let mut buf = BytesMut::new();
                 buf.reserve(MessageKind::KeepAlive.size().unwrap());
                 // Official node will only accept exactly 8 peers
@@ -100,13 +100,13 @@ impl MessageInner {
                 }
                 Bytes::from(buf)
             },
-            MessageInner::Publish(ref block) => {
+            MessagePayload::Publish(ref block) => {
                 block.serialize_bytes()
             },
-            MessageInner::ConfirmReq(ref block) => {
+            MessagePayload::ConfirmReq(ref block) => {
                 block.serialize_bytes()
             },
-            MessageInner::ConfirmAck {
+            MessagePayload::ConfirmAck {
                 ref public_key,
                 ref signature,
                 ref sequence,
@@ -114,8 +114,8 @@ impl MessageInner {
             } => {
                 let mut buf = BytesMut::new();
                 buf.reserve(32 + 32 + 8 + block.kind.size());
-                buf.put(public_key.as_ref());
-                buf.put(signature.as_ref());
+                buf.put_slice(public_key.as_bytes());
+                buf.put_slice(&signature.to_bytes());
                 buf.put_u64::<LittleEndian>(*sequence);
                 let block_bytes = block.serialize_bytes();
                 buf.put(block_bytes);
@@ -124,8 +124,8 @@ impl MessageInner {
         }
     }
 
-    pub fn deserialize_bytes(kind: MessageKind, bytes: Bytes) -> Result<Self> {
-        Ok(match kind {
+    pub fn deserialize_bytes(header: MessageHeader, bytes: Bytes) -> Result<Self> {
+        Ok(match header.kind {
             MessageKind::KeepAlive => {
                 let peers: Vec<SocketAddrV6> = bytes.chunks(18).filter_map(|chunk| {
                     if chunk.len() == 18 {
@@ -140,13 +140,19 @@ impl MessageInner {
                     }
                 }).collect();
                 if peers.len() > 0 {
-                    MessageInner::KeepAlive(peers)
+                    MessagePayload::KeepAlive(peers)
                 } else {
-                    MessageInner::Invalid
+                    MessagePayload::Invalid
                 }
             },
+            MessageKind::Publish => {
+                MessagePayload::Publish(Block::deserialize_bytes(bytes, header.block_kind)?)
+            },
+            MessageKind::ConfirmReq => {
+                MessagePayload::ConfirmReq(Block::deserialize_bytes(bytes, header.block_kind)?)
+            },
             _ => {
-                MessageInner::Invalid
+                MessagePayload::Invalid
             }
        })
     }
@@ -155,20 +161,20 @@ impl MessageInner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub header: MessageHeader,
-    pub inner: MessageInner,
+    pub payload: MessagePayload,
 }
 
 impl Message {
-    pub fn new(header: MessageHeader, inner: MessageInner) -> Self {
+    pub fn new(header: MessageHeader, payload: MessagePayload) -> Self {
         Message {
             header,
-            inner
+            payload
         }
     }
 
     pub fn serialize_bytes(&self) -> Result<Bytes> {
         let header_ser = bincode::serialize(&self.header)?;
-        let data = self.inner.serialize_bytes();
+        let data = self.payload.serialize_bytes();
         let mut buf = BytesMut::with_capacity(header_ser.len() + data.len());
         buf.put(header_ser);
         buf.put(data);
@@ -182,10 +188,13 @@ impl Message {
         }
         let header_bytes = bytes.split_to(8);
         let header: MessageHeader = bincode::deserialize(&header_bytes)?;
-        let inner = MessageInner::deserialize_bytes(header.kind, bytes)?;
+        if header.magic_number as char != 'R' {
+            bail!(ErrorKind::InvalidMagicNumber)
+        }
+        let payload = MessagePayload::deserialize_bytes(header, bytes)?;
         Ok(Message {
             header,
-            inner
+            payload
         })
     }
 
@@ -202,7 +211,7 @@ pub struct MessageBuilder {
     kind: MessageKind,
     block_kind: Option<BlockKind>,
     extensions: Option<Extensions>,
-    inner: Option<MessageInner>,
+    payload: Option<MessagePayload>,
 }
 
 impl MessageBuilder {
@@ -215,7 +224,7 @@ impl MessageBuilder {
             kind: kind,
             extensions: None,
             block_kind: None,
-            inner: None,
+            payload: None,
         }
     }
 
@@ -249,8 +258,8 @@ impl MessageBuilder {
         self
     }
 
-    pub fn with_data(mut self, data: MessageInner) -> Self {
-        self.inner = Some(data);
+    pub fn with_payload(mut self, payload: MessagePayload) -> Self {
+        self.payload = Some(payload);
         self
     }
 
@@ -265,8 +274,8 @@ impl MessageBuilder {
             block_kind: self.block_kind.unwrap_or(BlockKind::Invalid),
             extensions: self.extensions.unwrap_or(Extensions::NONE),
         };
-        let inner = self.inner.unwrap_or(MessageInner::Invalid);
-        Message::new(header, inner)
+        let payload = self.payload.unwrap_or(MessagePayload::Invalid);
+        Message::new(header, payload)
     }
 }
 
@@ -287,9 +296,9 @@ mod tests {
         assert_eq!(message.header.version_using, Version::Seven);
         assert_eq!(message.header.version_min, Version::One);
         assert_eq!(message.header.kind, MessageKind::KeepAlive);
-        assert_eq!(message.header.block_kind, BlockKind::Invalid);
+        assert_eq!(message.header.block_kind, BlockKind::NotABlock);
         assert_eq!(message.header.extensions, Extensions::NONE);
-        assert_eq!(message.inner, MessageInner::KeepAlive(vec![sock.clone(); 8]));
+        assert_eq!(message.payload, MessagePayload::KeepAlive(vec![sock.clone(); 8]));
     }
 
     #[test]
@@ -297,7 +306,7 @@ mod tests {
         let message_raw = Bytes::from(HEXUPPER.decode(b"524307070102000000000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B").unwrap());
         let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
         let message = MessageBuilder::new(MessageKind::KeepAlive)
-            .with_data(MessageInner::KeepAlive(vec![sock.clone(); 8]))
+            .with_data(MessagePayload::KeepAlive(vec![sock.clone(); 8]))
             .build();
         let message_ser = message.serialize_bytes().unwrap();
         assert_eq!(&message_ser[..], &message_raw[..]);
