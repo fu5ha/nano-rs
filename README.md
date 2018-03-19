@@ -16,6 +16,7 @@ This repo serves as a monorepo that contains several crates, including the root 
     - [ ] Message body
       - [x] Block
       - [X] Keepalive peers
+      - [ ] Confirm Ack (votes etc)
       - [ ] Others...
   - [ ] Database
   - [x] Proof of work
@@ -24,7 +25,8 @@ This repo serves as a monorepo that contains several crates, including the root 
   - [ ] Networking
     - [ ] Receiving keepalives and blocks
       - [x] keepalives
-      - [ ] publish
+      - [x] publish
+      - [x] confirm_req
       - [ ] confirm_ack
       - [ ] others...
     - [x] Sending keepalives
