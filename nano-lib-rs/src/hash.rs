@@ -1,12 +1,15 @@
 use super::error::Result;
 use std::mem;
+use byteorder::{ByteOrder, LittleEndian};
 
 pub trait Hasher {
     type Output;
 
     fn write(&mut self, bytes: &[u8]);
     fn write_u128(&mut self, i: u128) {
-        self.write(&unsafe { mem::transmute::<_, [u8; 16]>(i) })
+        let mut buf = [0u8; 64];
+        LittleEndian::write_u128(&mut buf, i);
+        self.write(&buf);
     }
     fn finish(self) -> Result<Self::Output>;
 }
