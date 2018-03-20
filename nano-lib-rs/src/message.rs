@@ -285,24 +285,42 @@ mod tests {
     use data_encoding::HEXUPPER;
 
     #[test]
-    fn deserialize_message() {
-        // TODO: Deserialize message body
+    fn deserialize_message_header() {
+        let test_cases = vec![
+            (b"5243070701020000", MAGIC_NUMBER, NetworkKind::Main, Version::Seven, Version::Seven, Version::One, MessageKind::KeepAlive, BlockKind::Invalid, Extensions::NONE),
+            (b"5241060504000001", MAGIC_NUMBER, NetworkKind::Test, Version::Six, Version::Five, Version::Four, MessageKind::Invalid, BlockKind::NotABlock, Extensions::NONE),
+            (b"5242030201010002", MAGIC_NUMBER, NetworkKind::Beta, Version::Three, Version::Two, Version::One, MessageKind::NotAMessage, BlockKind::Send, Extensions::NONE),
+            (b"5243060601030003", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::Publish, BlockKind::Receive, Extensions::NONE),
+            (b"5243060601040004", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmReq, BlockKind::Open, Extensions::NONE),
+            (b"5243060601050005", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmAck, BlockKind::Change, Extensions::NONE),
+            (b"5243060601060006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPull, BlockKind::Utx, Extensions::NONE),
+            (b"5243060601070006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPush, BlockKind::Utx, Extensions::NONE),
+            (b"5243060601080006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::FrontierReq, BlockKind::Utx, Extensions::NONE),
+        ];
+        for (bytes, num, net, vmax, vuse, vmin, mkind, bkind, ext) in test_cases.into_iter() {
+            let message_raw = Bytes::from(HEXUPPER.decode(bytes).unwrap());
+            let header: MessageHeader = bincode::deserialize(&message_raw).unwrap();
+            assert_eq!(header.magic_number, num);
+            assert_eq!(header.network, net);
+            assert_eq!(header.version_max, vmax);
+            assert_eq!(header.version_using, vuse);
+            assert_eq!(header.version_min, vmin);
+            assert_eq!(header.kind, mkind);
+            assert_eq!(header.block_kind, bkind);
+            assert_eq!(header.extensions, ext);
+        }
+    }
+
+    #[test]
+    fn deserialize_keepalive() {
         let message_raw = Bytes::from(HEXUPPER.decode(b"524307070102000100000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B").unwrap());
         let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
         let message = Message::deserialize_bytes(message_raw.clone()).expect("should deserialize");
-        assert_eq!(message.header.magic_number, MAGIC_NUMBER);
-        assert_eq!(message.header.network, NetworkKind::Main);
-        assert_eq!(message.header.version_max, Version::Seven);
-        assert_eq!(message.header.version_using, Version::Seven);
-        assert_eq!(message.header.version_min, Version::One);
-        assert_eq!(message.header.kind, MessageKind::KeepAlive);
-        assert_eq!(message.header.block_kind, BlockKind::NotABlock);
-        assert_eq!(message.header.extensions, Extensions::NONE);
         assert_eq!(message.payload, MessagePayload::KeepAlive(vec![sock.clone(); 8]));
     }
 
     #[test]
-    fn serialize_message() {
+    fn serialize_keepalive() {
         let message_raw = Bytes::from(HEXUPPER.decode(b"524307070102000000000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B00000000000000000000000000000000A31B").unwrap());
         let sock: SocketAddrV6 = "[::]:7075".parse().unwrap();
         let message = MessageBuilder::new(MessageKind::KeepAlive)
