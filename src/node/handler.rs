@@ -42,7 +42,8 @@ pub fn publish(mut msg: Message, _src: SocketAddrV6, _state: Arc<State>)
             Ok(hash) => hash.into(),
             Err(e) => format!("Error calculating hash for block: {}", e),
         };
-        info!("Got {:?} block with hash {}", block.kind, hash);
+        let valid = if block.verify_work().unwrap_or(false) { "valid" } else { "INVALID" };
+        info!("Got {:?} block with hash {}. Work {}.", block.kind, hash, valid);
         Box::new(stream::empty())
     } else {
         debug!("Malformed Publish, ignoring.");
@@ -59,7 +60,8 @@ pub fn confirm_req(mut msg: Message, _src: SocketAddrV6, _state: Arc<State>)
             Ok(hash) => hash.into(),
             Err(e) => format!("Error calculating hash for block: {}", e),
         };
-        info!("Got {:?} block with hash {}", block.kind, hash);
+        let valid = if block.verify_work().unwrap_or(false) { "valid" } else { "invalid" };
+        info!("Got {:?} block with hash {}. Work is {}", block.kind, hash, valid);
         Box::new(stream::empty())
     } else {
         debug!("Malformed ConfirmReq, ignoring.");

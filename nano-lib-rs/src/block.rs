@@ -77,7 +77,7 @@ enum_byte!(BlockKind {
     Receive = 0x03,
     Open = 0x04,
     Change = 0x05,
-    Utx = 0x06,
+    State = 0x06,
 });
 
 impl BlockKind {
@@ -89,7 +89,7 @@ impl BlockKind {
             BlockKind::Receive => 64,
             BlockKind::Open => 96,
             BlockKind::Change => 32,
-            BlockKind::Utx => 144,
+            BlockKind::State => 144,
         }
     }
 }
@@ -221,6 +221,9 @@ impl Block {
                 let signature = Signature::from_bytes(&sig_buf)?;
                 let mut work_buf = [0u8; 8];
                 buf.copy_to_slice(&mut work_buf);
+                if kind != BlockKind::State {
+                    work_buf.reverse();
+                }
                 let work = Work::from_bytes(&work_buf)?;
                 Block::new(kind, Some(payload), Some(signature), Some(work))
             }
@@ -334,7 +337,7 @@ pub enum BlockPayload {
         representative: PublicKey,
     },
     /// A universal transaction which contains the account state.
-    Utx {
+    State {
         account: PublicKey,
         previous: BlockHash,
         representative: PublicKey,
@@ -350,7 +353,7 @@ impl BlockPayload {
             BlockPayload::Receive { ref previous, .. } => previous.clone().into(),
             BlockPayload::Open { ref account, .. } => InputHash::from_bytes(account.clone().to_bytes()).unwrap(),
             BlockPayload::Change { ref previous, .. } => previous.clone().into(),
-            BlockPayload::Utx { ref previous, .. } => previous.clone().into(),
+            BlockPayload::State { ref previous, .. } => previous.clone().into(),
         }
     }
 
@@ -392,14 +395,14 @@ impl BlockPayload {
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(representative.as_bytes());
             }
-            BlockPayload::Utx {
+            BlockPayload::State {
                 ref account,
                 ref previous,
                 ref representative,
                 ref balance,
                 ref link,
             } => {
-                buf.reserve(BlockKind::Utx.size());
+                buf.reserve(BlockKind::State.size());
                 buf.put_slice(account.as_bytes());
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(representative.as_bytes());
@@ -458,8 +461,8 @@ impl BlockPayload {
                 let representative = PublicKey::from_bytes(&temp_buf)?;
                 BlockPayload::Change { previous, representative }
             }
-            BlockKind::Utx => {
-                if buf.remaining() < BlockKind::Utx.size() {
+            BlockKind::State => {
+                if buf.remaining() < BlockKind::State.size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -473,7 +476,7 @@ impl BlockPayload {
                 buf.copy_to_slice(&mut temp_buf);
                 // TODO: Process link properly
                 let link = Link::Unknown(temp_buf);
-                BlockPayload::Utx { account, previous, representative, balance, link }
+                BlockPayload::State { account, previous, representative, balance, link }
             }
             _ => bail!(ErrorKind::InvalidBlockPayloadKindError(kind))
         })
@@ -517,7 +520,7 @@ impl Hash for BlockPayload {
                 previous.hash(state);
                 representative.hash(state);
             }
-            BlockPayload::Utx {
+            BlockPayload::State {
                 ref account,
                 ref previous,
                 ref representative,
@@ -525,7 +528,7 @@ impl Hash for BlockPayload {
                 ref link,
             } => {
                 state.write(&[0u8; 31]);
-                state.write(&[BlockKind::Utx as u8]); // block type code
+                state.write(&[BlockKind::State as u8]); // block type code
                 account.hash(state);
                 previous.hash(state);
                 representative.hash(state);

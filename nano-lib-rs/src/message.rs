@@ -293,9 +293,9 @@ mod tests {
             (b"5243060601030003", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::Publish, BlockKind::Receive, Extensions::NONE),
             (b"5243060601040004", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmReq, BlockKind::Open, Extensions::NONE),
             (b"5243060601050005", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmAck, BlockKind::Change, Extensions::NONE),
-            (b"5243060601060006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPull, BlockKind::Utx, Extensions::NONE),
-            (b"5243060601070006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPush, BlockKind::Utx, Extensions::NONE),
-            (b"5243060601080006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::FrontierReq, BlockKind::Utx, Extensions::NONE),
+            (b"5243060601060006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPull, BlockKind::State, Extensions::NONE),
+            (b"5243060601070006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPush, BlockKind::State, Extensions::NONE),
+            (b"5243060601080006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::FrontierReq, BlockKind::State, Extensions::NONE),
         ];
         for (bytes, num, net, vmax, vuse, vmin, mkind, bkind, ext) in test_cases.into_iter() {
             let message_raw = Bytes::from(HEXUPPER.decode(bytes).unwrap());
