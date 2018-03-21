@@ -1,4 +1,6 @@
 # Nano-rs
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ftermhn%2Fnano-rs.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Ftermhn%2Fnano-rs?ref=badge_shield)
+
 
 Nano-rs is a pure Rust implementation of the Nano cryptocurrency based on Tokio. It is currently in its very infancy.
 
@@ -57,3 +59,7 @@ cargo run --release
 ```
 
 Logging is printed to stderr and saved in files in the `logs/` folder.
+
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Ftermhn%2Fnano-rs.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Ftermhn%2Fnano-rs?ref=badge_large)
