@@ -14,6 +14,9 @@ extern crate data_encoding;
 extern crate crossbeam_utils;
 extern crate crossbeam_channel;
 extern crate num_cpus;
+extern crate byteorder;
+#[macro_use]
+extern crate lazy_static;
 
 use blake2::{Blake2b};
 use blake2::digest::{Input, VariableOutput};
@@ -22,22 +25,33 @@ use data_encoding::{HEXLOWER, HEXUPPER};
 
 use rand::{XorShiftRng, Rng, SeedableRng};
 
+use byteorder::{ByteOrder, LittleEndian, BigEndian};
+
+use std::fmt;
+
 /// Error types, using error-chain
 pub mod error;
 use error::*;
 
+const THRESHOLD_STR: &[u8] = b"ffffffc000000000";
+
+lazy_static! {
+    /// The network threshold
+    pub static ref THRESHOLD: [u8; 8] = {
+        let mut buf = [0u8; 8];
+        let _ = HEXLOWER.decode_mut(THRESHOLD_STR, &mut buf).unwrap();
+        buf
+    };
+}
+
 /// An 8 byte array used to represent the work value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Work([u8; 8]);
+pub struct Work(u64);
 
 impl Work
 {
-    /// Create Work from properly sized byte array
-    pub fn new(bytes: [u8; 8]) -> Self {
-        Work(bytes)
-    }
-
-    /// Convert hexadecimal formatted data into a Work value
+    /// Convert hexadecimal formatted data into a Work value.
+    /// Hex value is expected to be encoded in *big-endian* byte order.
     pub fn from_hex<T: AsRef<[u8]>>(s: T) -> Result<Self> {
         let bytes = s.as_ref();
         if bytes.len() != 16 {
@@ -46,35 +60,27 @@ impl Work
         let mut buf = [0u8; 8];
         let _ = HEXLOWER.decode_mut(bytes, &mut buf)
             .map_err::<Error, _>(|e| ErrorKind::InvalidHexCharacterError(e.error.position).into())?;
-        Ok(Work(buf))
-    }
-
-    /// Create Work from a raw byte slice
-    pub fn from_bytes<T: AsRef<[u8]>>(bytes: T) -> Result<Self> {
-        let bytes = bytes.as_ref();
-        if bytes.len() != 8 {
-            bail!(ErrorKind::WorkLengthError);
-        }
-        let mut buf = [0u8; 8];
-        for i in 0..8 {
-            buf[i] = bytes[i];
-        }
-        Ok(Work(buf))
-    }
-}
-
-impl AsRef<[u8]> for Work {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
+        let work = BigEndian::read_u64(&buf);
+        Ok(Work(work))
     }
 }
 
 impl From<Work> for String {
     fn from(work: Work) -> Self {
-        let string = HEXLOWER.encode(&work.0);
+        let mut buf = [0u8; 8];
+        BigEndian::write_u64(&mut buf, work.0);
+        let string = HEXLOWER.encode(&buf);
         string
     }
 }
+
+impl fmt::Display for Work {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let string: String = (*self).into();
+        write!(f, "{}", string)
+    }
+}
+
 
 /// A 32 byte array used to represent a valid input hash
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +117,11 @@ impl InputHash
         }
         Ok(InputHash(buf))
     }
+
+    /// View the hash as a byte slice
+    pub fn as_bytes<'a>(&'a self) -> &'a [u8; 32] {
+        &(self.0)
+    }
 }
 
 impl AsRef<[u8]> for InputHash {
@@ -126,11 +137,17 @@ impl From<InputHash> for String {
     }
 }
 
-fn check_result_threshold(hash: &[u8]) -> bool {
-    let first = (&hash[5..8]).iter().fold(true, |acc, &byte| {
-        acc && byte == 255
-    });
-    hash[4] >= 192 && first
+impl fmt::Display for InputHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let string: String = (*self).into();
+        write!(f, "{}", string)
+    }
+}
+
+fn check_result_threshold(hash: &[u8; 8]) -> bool {
+    (&hash).iter().rev().enumerate().fold(true, |acc, (i, &byte)| {
+        acc && byte >= THRESHOLD[i]
+    })
 }
 
 fn hash_work_internal(work: &[u8], hash: &[u8]) -> [u8; 8] {
@@ -147,7 +164,8 @@ fn hash_work_internal(work: &[u8], hash: &[u8]) -> [u8; 8] {
 pub fn generate_work(hash: &InputHash, max_iters: Option<u64>) -> Option<Work> {
     let hash = hash.0;
     if let Some(w) = generate_work_internal(&hash[..], max_iters) {
-        Some(Work(w))
+        let work = LittleEndian::read_u64(&w);
+        Some(Work(work))
     } else {
         None
     }
@@ -170,7 +188,7 @@ fn generate_work_internal(hash: &[u8], max_iters: Option<u64>) -> Option<[u8; 8]
                 while !result_valid && !done && iters < max_iters/numcpus as u64 {
                     work = rng.gen::<[u8; 8]>();
                     let output = hash_work_internal(&work[..], hash);
-                    result_valid = check_result_threshold(&output[..]);
+                    result_valid = check_result_threshold(&output);
                     if has_max_iters {
                         iters += 1;
                     }
@@ -180,7 +198,6 @@ fn generate_work_internal(hash: &[u8], max_iters: Option<u64>) -> Option<[u8; 8]
                     return;
                 }
                 if result_valid {
-                    work.reverse();
                     let _ = tx.send(Some(work)).is_ok();
                 } else {
                     let _ = tx.send(None).is_ok();
@@ -203,19 +220,10 @@ fn generate_work_internal(hash: &[u8], max_iters: Option<u64>) -> Option<[u8; 8]
 /// Checks if a given `Work` value is valid for a given `InputHash` (usually a block hash or public key)
 pub fn check_work(hash: &InputHash, work: &Work) -> bool {
     let hash = hash.0;
-    let mut work = work.0;
-    work.reverse();
-    let mut hasher = Blake2b::new(8).unwrap();
-    hasher.process(&work[..]);
-    hasher.process(&hash[..]);
-    let mut output = [0u8; 8];
-    {
-        let result = hasher.variable_result(&mut output);
-        if result.is_err() {
-            return false;
-        }
-    }
-    check_result_threshold(&output[..])
+    let mut work_bytes = [0u8; 8];
+    LittleEndian::write_u64(&mut work_bytes, work.0);
+    let value = hash_work_internal(&work_bytes, &hash);
+    check_result_threshold(&value)
 }
 
 #[cfg(test)]
@@ -239,11 +247,10 @@ mod tests {
     }
     
     #[test]
-    fn creates_work_from_hex_and_bytes() {
+    fn creates_work_from_hex() {
         let hex = String::from("4effb6b0cd5625e2");
         let work = Work::from_hex(&hex).unwrap();
-        let work2 = Work::from_bytes(HEXLOWER.decode(hex.as_ref()).unwrap()).unwrap();
-        assert!(work.0 == work2.0);
+        assert!(work.0 == 5692469324495070690);
     }
 
     #[test]
