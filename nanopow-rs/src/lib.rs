@@ -46,7 +46,7 @@ lazy_static! {
 
 /// An 8 byte array used to represent the work value
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Work(u64);
+pub struct Work(pub u64);
 
 impl Work
 {

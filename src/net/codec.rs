@@ -81,7 +81,7 @@ mod tests {
                 source: BlockHash::from_bytes(&dummy_data[..32]).unwrap(),
             }),
             Some(Signature::from_bytes(&dummy_data).unwrap()),
-            Some(Work::from_bytes(&dummy_data[..8]).unwrap()));
+            Some(Work(0)));
         let message = MessageBuilder::new(MessageKind::Publish)
             .with_block_kind(BlockKind::Receive)
             .with_payload(MessagePayload::Publish(block))

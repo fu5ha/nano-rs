@@ -1,7 +1,7 @@
 extern crate nanopow_rs;
 pub use nanopow_rs::{InputHash, Work};
 
-use byteorder::{BigEndian, ByteOrder};
+use byteorder::{BigEndian, LittleEndian, ByteOrder};
 
 use bytes::{Bytes, BytesMut, BufMut, Buf, IntoBuf};
 use blake2::Blake2b;
@@ -195,7 +195,11 @@ impl Block {
             }
             if let Some(ref w) = self.work {
                 buf.reserve(8);
-                buf.put_slice(w.as_ref());
+                if self.kind != BlockKind::State {
+                    buf.put_u64::<BigEndian>(w.0);
+                } else {
+                    buf.put_u64::<LittleEndian>(w.0);
+                }
             }
             Bytes::from(buf)
         } else {
@@ -219,12 +223,11 @@ impl Block {
                 let mut sig_buf = [0u8; 64];
                 buf.copy_to_slice(&mut sig_buf);
                 let signature = Signature::from_bytes(&sig_buf)?;
-                let mut work_buf = [0u8; 8];
-                buf.copy_to_slice(&mut work_buf);
-                if kind != BlockKind::State {
-                    work_buf.reverse();
-                }
-                let work = Work::from_bytes(&work_buf)?;
+                let work = if kind == BlockKind::State {
+                    Work(buf.get_u64::<BigEndian>())
+                } else {
+                    Work(buf.get_u64::<LittleEndian>())
+                };
                 Block::new(kind, Some(payload), Some(signature), Some(work))
             }
         })

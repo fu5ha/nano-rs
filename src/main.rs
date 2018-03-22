@@ -14,6 +14,7 @@ extern crate nano_lib_rs;
 extern crate log;
 extern crate fern;
 extern crate chrono;
+extern crate clap;
 
 #[macro_use]
 extern crate error_chain;
@@ -37,15 +38,22 @@ use std::net::{ToSocketAddrs, SocketAddr};
 
 use futures::{Future};
 
-fn run() -> Result<()> {
+use clap::{Arg, App};
+
+fn run(network: NetworkKind) -> Result<()> {
     info!("Starting nano-rs!");
 
-    let listen_addr = "[::]:7075".parse()?;
-    let peers: Vec<SocketAddr> = "rai.raiblocks.net:7075".to_socket_addrs()?.collect();
+    // TODO: Figure out why beta doesn't work and add test
+    let port = match network {
+        NetworkKind::Beta => 54000,
+        _ => 7075
+    };
+
+    let listen_addr = format!("[::]:{}", port).parse()?;
+    let peers: Vec<SocketAddr> = format!("rai.raiblocks.net:{}", port).to_socket_addrs()?.collect();
     if let None = peers.get(0) {
         return Err("Could not connect to initial peer".into());
     }
-    let network = NetworkKind::Main;
 
     let config = NodeConfig {
         peers,
@@ -64,7 +72,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn setup_logger() -> Result<()> {
+fn setup_logger(log_level: log::LevelFilter) -> Result<()> {
     use std::fs::create_dir;
     let base_path: &str = match create_dir("log") {
         Ok(_) => {
@@ -88,7 +96,7 @@ fn setup_logger() -> Result<()> {
                 message
             ))
         })
-        .level(log::LevelFilter::Info)
+        .level(log_level)
         .level_for("tokio_reactor", log::LevelFilter::Error)
         .chain(std::io::stderr())
         .chain(fern::log_file(format!("{}nano-rs__{}.log", base_path, chrono::Local::now().format("%Y-%m-%d__%H-%M-%S")))?)
@@ -97,8 +105,46 @@ fn setup_logger() -> Result<()> {
 }
 
 fn main() {
+    let matches = App::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .author("Gray Olson <gray@grayolson.com>")
+        .about("An implementation of Nano in Rust using Tokio.")
+        .arg(Arg::with_name("log-level")
+            .short("l")
+            .long("log-level")
+            .value_name("LOG_LEVEL")
+            .default_value("info")
+            .possible_values(&["off", "error", "warn", "info", "debug", "trace"])
+            .case_insensitive(true)
+            .help("Set logging level (default Info)"))
+        .arg(Arg::with_name("network")
+            .short("n")
+            .long("network")
+            .value_name("NET")
+            .default_value("live")
+            .possible_values(&["live", "beta", "test"])
+            .help("The nano network to connect to"))
+        .get_matches();
+
+    let network = match matches.value_of("network").unwrap() {
+        "live" => NetworkKind::Live,
+        "beta" => NetworkKind::Beta,
+        "test" => NetworkKind::Test,
+        _ => unreachable!(),
+    };
+
+    let log_level = match matches.value_of("log-level").unwrap() {
+        "off" => log::LevelFilter::Off,
+        "error" => log::LevelFilter::Error,
+        "warn" => log::LevelFilter::Warn,
+        "info" => log::LevelFilter::Info,
+        "debug" => log::LevelFilter::Debug,
+        "trace" => log::LevelFilter::Trace,
+        _ => unreachable!(),
+    };
+
     // Setup logger
-    if let Err(e) = setup_logger() {
+    if let Err(e) = setup_logger(log_level) {
         use std::io::Write;
         let stderr = &mut ::std::io::stderr();
         let errmsg = "Error writing to stderr";
@@ -107,7 +153,7 @@ fn main() {
     }
 
     // Run program and log errors from error-chain using logger
-    if let Err(ref e) = run() {
+    if let Err(ref e) = run(network) {
 
         error!("Failed with error: {}", e);
 

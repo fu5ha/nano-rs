@@ -32,7 +32,7 @@ pub const MAGIC_NUMBER: u8 = 0x52;
 enum_byte!(NetworkKind {
     Test = 0x41, // 'A' in ASCII
     Beta = 0x42, // 'B' in ASCII
-    Main = 0x43, // 'C' in ASCII
+    Live = 0x43, // 'C' in ASCII
 });
 
 enum_byte!(Version {
@@ -266,7 +266,7 @@ impl MessageBuilder {
     pub fn build(self) -> Message {
         let header = MessageHeader {
             magic_number: MAGIC_NUMBER,
-            network: self.network.unwrap_or(NetworkKind::Main),
+            network: self.network.unwrap_or(NetworkKind::Live),
             version_max: self.version_max.unwrap_or(Version::Seven),
             version_using: self.version_using.unwrap_or(Version::Seven),
             version_min: self.version_min.unwrap_or(Version::One),
@@ -287,15 +287,15 @@ mod tests {
     #[test]
     fn deserialize_message_header() {
         let test_cases = vec![
-            (b"5243070701020000", MAGIC_NUMBER, NetworkKind::Main, Version::Seven, Version::Seven, Version::One, MessageKind::KeepAlive, BlockKind::Invalid, Extensions::NONE),
+            (b"5243070701020000", MAGIC_NUMBER, NetworkKind::Live, Version::Seven, Version::Seven, Version::One, MessageKind::KeepAlive, BlockKind::Invalid, Extensions::NONE),
             (b"5241060504000001", MAGIC_NUMBER, NetworkKind::Test, Version::Six, Version::Five, Version::Four, MessageKind::Invalid, BlockKind::NotABlock, Extensions::NONE),
             (b"5242030201010002", MAGIC_NUMBER, NetworkKind::Beta, Version::Three, Version::Two, Version::One, MessageKind::NotAMessage, BlockKind::Send, Extensions::NONE),
-            (b"5243060601030003", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::Publish, BlockKind::Receive, Extensions::NONE),
-            (b"5243060601040004", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmReq, BlockKind::Open, Extensions::NONE),
-            (b"5243060601050005", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::ConfirmAck, BlockKind::Change, Extensions::NONE),
-            (b"5243060601060006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPull, BlockKind::State, Extensions::NONE),
-            (b"5243060601070006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::BulkPush, BlockKind::State, Extensions::NONE),
-            (b"5243060601080006", MAGIC_NUMBER, NetworkKind::Main, Version::Six, Version::Six, Version::One, MessageKind::FrontierReq, BlockKind::State, Extensions::NONE),
+            (b"5243060601030003", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::Publish, BlockKind::Receive, Extensions::NONE),
+            (b"5243060601040004", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::ConfirmReq, BlockKind::Open, Extensions::NONE),
+            (b"5243060601050005", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::ConfirmAck, BlockKind::Change, Extensions::NONE),
+            (b"5243060601060006", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::BulkPull, BlockKind::State, Extensions::NONE),
+            (b"5243060601070006", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::BulkPush, BlockKind::State, Extensions::NONE),
+            (b"5243060601080006", MAGIC_NUMBER, NetworkKind::Live, Version::Six, Version::Six, Version::One, MessageKind::FrontierReq, BlockKind::State, Extensions::NONE),
         ];
         for (bytes, num, net, vmax, vuse, vmin, mkind, bkind, ext) in test_cases.into_iter() {
             let message_raw = Bytes::from(HEXUPPER.decode(bytes).unwrap());
