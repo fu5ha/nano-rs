@@ -15,7 +15,10 @@ use data_encoding::HEXUPPER;
 
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::de::{Deserialize, Deserializer};
+use serde::ser::{Serialize, Serializer, SerializeStruct};
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockHash([u8; 32]);
 
 impl BlockHash {
@@ -81,38 +84,35 @@ enum_byte!(BlockKind {
 });
 
 impl BlockKind {
-    pub fn size(&self) -> usize {
+    pub fn payload_size(&self) -> usize {
         match *self {
-            BlockKind::Invalid => 0,
-            BlockKind::NotABlock => 0,
             BlockKind::Send => 80,
             BlockKind::Receive => 64,
             BlockKind::Open => 96,
             BlockKind::Change => 32,
             BlockKind::State => 144,
+            _ => 0,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
-    pub kind: BlockKind,
-    pub payload: Option<BlockPayload>,
-    pub next: Option<BlockHash>,
+    pub payload: BlockPayload,
     pub work: Option<Work>,
     pub signature: Option<Signature>,
+    pub next: Option<BlockHash>,
     pub hash: Option<BlockHash>
 }
 
 impl Block {
-    pub fn new(kind: BlockKind, payload: Option<BlockPayload>, signature: Option<Signature>, work: Option<Work>) -> Self {
+    pub fn new(payload: BlockPayload, signature: Option<Signature>, work: Option<Work>) -> Self {
         Block {
-            kind,
             payload,
-            next: None,
             work,
             signature,
             hash: None,
+            next: None,
         }
     }
     pub fn next(&self) -> Option<BlockHash> {
@@ -128,31 +128,21 @@ impl Block {
         self.work.clone()
     }
     pub fn set_work(&mut self, work: Work) -> Result<()> {
-        if let Some(ref p) = self.payload {
-            let valid = nanopow_rs::check_work(&p.work_source(), &work);
-            if valid {
-                bail!(ErrorKind::InvalidWorkError);
-            }
-            self.work = Some(work);
-            Ok(())
-        } else {
-            bail!("Cannot set work for a block with no payload");
+        let valid = nanopow_rs::check_work(&self.payload.root(), &work);
+        if valid {
+            bail!(ErrorKind::InvalidWorkError);
         }
+        self.work = Some(work);
+        Ok(())
     }
     pub fn generate_work(&mut self) -> Option<Work> {
-        if let Some(ref p) = self.payload {
-            let work = nanopow_rs::generate_work(&p.work_source(), None);
-            self.work = work;
-            work
-        } else {
-            None
-        }
+        let work = nanopow_rs::generate_work(&self.payload.root(), None);
+        self.work = work;
+        work
     }
     pub fn verify_work(&self) -> Result<bool> {
-        if let Some(ref p) = self.payload {
-            if let Some(ref w) = self.work {
-                return Ok(nanopow_rs::check_work(&p.work_source(), w))
-            }
+        if let Some(ref w) = self.work {
+            return Ok(nanopow_rs::check_work(&self.payload.root(), w))
         }
         bail!(ErrorKind::NoWorkError);
     }
@@ -160,15 +150,11 @@ impl Block {
         self.hash
     }
     pub fn calculate_hash(&mut self) -> Result<BlockHash> {
-        if let Some(ref p) = self.payload {
-            let mut hasher = BlockHasher::new();
-            p.hash(&mut hasher);
-            let hash = hasher.finish()?;
-            self.hash = Some(hash);
-            Ok(hash)
-        } else {
-            bail!("Cannot calculate hash for block without payload")
-        }
+        let mut hasher = BlockHasher::new();
+        self.payload.hash(&mut hasher);
+        let hash = hasher.finish()?;
+        self.hash = Some(hash);
+        Ok(hash)
     }
     pub fn is_signed(&self) -> bool {
         self.signature().is_some()
@@ -186,36 +172,32 @@ impl Block {
         self.calculate_hash()
     }
     pub fn serialize_bytes(&self) -> Bytes {
-        if let Some(ref p) = self.payload {
-            let mut buf = BytesMut::new();
-            p.serialize_bytes(&mut buf);
-            if let Some(ref s) = self.signature {
-                buf.reserve(SIGNATURE_LENGTH);
-                buf.put_slice(&s.to_bytes());
-            }
-            if let Some(ref w) = self.work {
-                buf.reserve(8);
-                if self.kind != BlockKind::State {
-                    buf.put_u64::<BigEndian>(w.0);
-                } else {
-                    buf.put_u64::<LittleEndian>(w.0);
-                }
-            }
-            Bytes::from(buf)
-        } else {
-            Bytes::with_capacity(0)
+        let mut buf = BytesMut::new();
+        self.payload.serialize_bytes(&mut buf);
+        if let Some(ref s) = self.signature {
+            buf.reserve(SIGNATURE_LENGTH);
+            buf.put_slice(&s.to_bytes());
         }
+        if let Some(ref w) = self.work {
+            buf.reserve(8);
+            if let BlockPayload::State {..} = self.payload {
+                buf.put_u64::<BigEndian>(w.0);
+            } else {
+                buf.put_u64::<LittleEndian>(w.0);
+            }
+        }
+        Bytes::from(buf)
     }
     pub fn deserialize_bytes(bytes: Bytes, kind: BlockKind) -> Result<Self> {
         Ok(match kind {
             BlockKind::Invalid | BlockKind::NotABlock => {
-                Block::new(kind, None, None, None)
+                bail!("Invalid block kind")
             },
             _ => {
                 let len = bytes.len();
-                if len < kind.size() + SIGNATURE_LENGTH {
+                if len < kind.payload_size() + SIGNATURE_LENGTH {
                     bail!(ErrorKind::BlockParseError(BlockParseErrorKind::NoSignature));
-                } else if len < kind.size() + SIGNATURE_LENGTH + 8 {
+                } else if len < kind.payload_size() + SIGNATURE_LENGTH + 8 {
                     bail!(ErrorKind::BlockParseError(BlockParseErrorKind::NoWork));
                 }
                 let mut buf = bytes.into_buf();
@@ -228,7 +210,7 @@ impl Block {
                 } else {
                     Work(buf.get_u64::<LittleEndian>())
                 };
-                Block::new(kind, Some(payload), Some(signature), Some(work))
+                Block::new(payload, Some(signature), Some(work))
             }
         })
     }
@@ -295,62 +277,81 @@ impl<T: Buf> BufExt for T {}
 
 
 /// Link field contains source block_hash if receiving, destination account if sending
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Link {
-    Source(BlockHash),
-    Destination(PublicKey),
-    Unknown([u8; 32])
-}
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Link(pub [u8; 32]);
 
-// TODO: Process Link properly so that we can remove unkown type
 impl Link {
     pub fn as_bytes<'a>(&'a self) -> &'a [u8; 32] {
-        match *self {
-            Link::Source(ref h) => h.as_bytes(),
-            Link::Destination(ref k) => k.as_bytes(),
-            Link::Unknown(ref b) => &b
-        }
+        &self.0
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum BlockPayload {
+    /// Block that sends funds to another Nano account.
+    /// Must be `Receive`d by the other account.
+    /// 
+    /// ### Deprecation Notice
+    /// Will soon be deprecated in favor of State blocks.
     Send {
+        /// The previous block hash on the account's chain 
         previous: BlockHash,
+        /// The destination account's raw ed25519 public key.
         destination: PublicKey,
         /// The balance of the account *after* the send.
         balance: u128,
     },
+    /// Block that receives funds from a corresponding
+    /// `Send` block.
+    /// 
+    /// ### Deprecation Notice
+    /// Will soon be deprecated in favor of State blocks.
     Receive {
+        /// The previous block hash on the account's chain 
         previous: BlockHash,
         /// The block we're receiving.
         source: BlockHash,
     },
     /// The first "receive" in an account chain.
     /// Creates the account, and sets the representative.
+    /// 
+    /// ### Deprecation Notice
+    /// Will soon be deprecated in favor of State blocks.
     Open {
         /// The block we're receiving.
         source: BlockHash,
+        /// This account's representative's raw ed25519 public key.
         representative: PublicKey,
+        /// The account's raw ed25519 public key.
         account: PublicKey,
     },
     /// Changes the representative for an account.
+    /// 
+    /// ### Deprecation Notice
+    /// Will soon be deprecated in favor of State blocks.
     Change {
+        /// The previous block hash on the account's chain 
         previous: BlockHash,
+        /// This account's representative's raw ed25519 public key.
         representative: PublicKey,
     },
-    /// A universal transaction which contains the account state.
+    /// A block which contains the account's full state.
     State {
+        /// This account's raw ed25519 public key.
         account: PublicKey,
+        /// The previous block hash on the account's chain. If this is the first
+        /// block on a chain, this should be set to all 0s.
         previous: BlockHash,
+        /// This account's representative's raw ed25519 public key.
         representative: PublicKey,
+        /// The balance of this account *after* this block is processed.
         balance: u128,
         link: Link,
     },
 }
 
 impl BlockPayload {
-    pub fn work_source(&self) -> InputHash {
+    pub fn root(&self) -> InputHash {
         match *self {
             BlockPayload::Send { ref previous, .. } => previous.clone().into(),
             BlockPayload::Receive { ref previous, .. } => previous.clone().into(),
@@ -360,6 +361,20 @@ impl BlockPayload {
         }
     }
 
+    pub fn kind(&self) -> BlockKind {
+        match *self {
+            BlockPayload::Send {..} => BlockKind::Send,
+            BlockPayload::Receive {..} => BlockKind::Receive,
+            BlockPayload::Open {..} => BlockKind::Open,
+            BlockPayload::Change {..} => BlockKind::Change,
+            BlockPayload::State {..} => BlockKind::State,
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        self.kind().payload_size()
+    }
+
     pub fn serialize_bytes(&self, buf: &mut BytesMut) {
         match *self {
             BlockPayload::Send {
@@ -367,7 +382,7 @@ impl BlockPayload {
                 ref destination,
                 ref balance,
             } => {
-                buf.reserve(BlockKind::Send.size());
+                buf.reserve(self.size());
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(destination.as_bytes());
                 buf.put_u128::<BigEndian>(*balance);
@@ -376,7 +391,7 @@ impl BlockPayload {
                 ref previous,
                 ref source,
             } => {
-                buf.reserve(BlockKind::Receive.size());
+                buf.reserve(self.size());
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(source.as_bytes());
             }
@@ -385,7 +400,7 @@ impl BlockPayload {
                 ref representative,
                 ref account,
             } => {
-                buf.reserve(BlockKind::Open.size());
+                buf.reserve(self.size());
                 buf.put_slice(source.as_bytes());
                 buf.put_slice(representative.as_bytes());
                 buf.put_slice(account.as_bytes());
@@ -394,7 +409,7 @@ impl BlockPayload {
                 ref previous,
                 ref representative,
             } => {
-                buf.reserve(BlockKind::Change.size());
+                buf.reserve(self.size());
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(representative.as_bytes());
             }
@@ -405,7 +420,7 @@ impl BlockPayload {
                 ref balance,
                 ref link,
             } => {
-                buf.reserve(BlockKind::State.size());
+                buf.reserve(self.size());
                 buf.put_slice(account.as_bytes());
                 buf.put_slice(previous.as_bytes());
                 buf.put_slice(representative.as_bytes());
@@ -418,7 +433,7 @@ impl BlockPayload {
     pub fn deserialize_bytes<B: BufExt>(buf: &mut B, kind: BlockKind) -> Result<Self> {
         Ok(match kind {
             BlockKind::Send => {
-                if buf.remaining() < BlockKind::Send.size() {
+                if buf.remaining() < kind.payload_size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -430,7 +445,7 @@ impl BlockPayload {
                 BlockPayload::Send { previous, destination, balance }
             }
             BlockKind::Receive => {
-                if buf.remaining() < BlockKind::Receive.size() {
+                if buf.remaining() < BlockKind::Receive.payload_size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -441,7 +456,7 @@ impl BlockPayload {
                 BlockPayload::Receive { previous, source }
             }
             BlockKind::Open => {
-                if buf.remaining() < BlockKind::Open.size() {
+                if buf.remaining() < BlockKind::Open.payload_size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -454,7 +469,7 @@ impl BlockPayload {
                 BlockPayload::Open { source, representative, account }
             }
             BlockKind::Change => {
-                if buf.remaining() < BlockKind::Change.size() {
+                if buf.remaining() < BlockKind::Change.payload_size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -465,7 +480,7 @@ impl BlockPayload {
                 BlockPayload::Change { previous, representative }
             }
             BlockKind::State => {
-                if buf.remaining() < BlockKind::State.size() {
+                if buf.remaining() < BlockKind::State.payload_size() {
                     bail!(ErrorKind::BlockPayloadLengthError(kind, buf.remaining()));
                 }
                 let mut temp_buf = [0u8; 32];
@@ -478,7 +493,7 @@ impl BlockPayload {
                 let balance = buf.get_u128::<BigEndian>();
                 buf.copy_to_slice(&mut temp_buf);
                 // TODO: Process link properly
-                let link = Link::Unknown(temp_buf);
+                let link = Link(temp_buf);
                 BlockPayload::State { account, previous, representative, balance, link }
             }
             _ => bail!(ErrorKind::InvalidBlockPayloadKindError(kind))

@@ -38,7 +38,7 @@ error_chain!{
         /// Attempted to create or parse a block with invalid data length for its kind
         BlockPayloadLengthError(kind: super::block::BlockKind, len: usize) {
             description("Attempted to create or parse a block with invalid data length for its kind")
-            display("Attempted to create block of type {:?} with data length {} (should be {})", kind, len, kind.size())
+            display("Attempted to create block of type {:?} with data length {} (should be {})", kind, len, kind.payload_size())
         }
         /// Attempted to deserialize a block payload for a type that does not have a payload
         InvalidBlockPayloadKindError(kind: super::block::BlockKind) {

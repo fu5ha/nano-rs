@@ -113,7 +113,7 @@ impl MessagePayload {
                 ref block,
             } => {
                 let mut buf = BytesMut::new();
-                buf.reserve(32 + 32 + 8 + block.kind.size());
+                buf.reserve(32 + 32 + 8 + block.payload.size());
                 buf.put_slice(public_key.as_bytes());
                 buf.put_slice(&signature.to_bytes());
                 buf.put_u64::<LittleEndian>(*sequence);

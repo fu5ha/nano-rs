@@ -1,6 +1,8 @@
 use nanopow_rs::InputHash;
 use super::hash::{Hash, Hasher};
 
+use serde::{Serialize, Deserialize};
+
 pub use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH};
 
 impl Hash for PublicKey {
@@ -9,6 +11,7 @@ impl Hash for PublicKey {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Address(pub String);
 
 impl From<PublicKey> for Address {
