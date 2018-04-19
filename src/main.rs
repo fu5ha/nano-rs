@@ -1,4 +1,3 @@
-#![feature(conservative_impl_trait)]
 extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_timer;

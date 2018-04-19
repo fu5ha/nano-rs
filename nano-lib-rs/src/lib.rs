@@ -22,6 +22,7 @@ extern crate ed25519_dalek;
 
 extern crate bytes;
 extern crate data_encoding;
+#[macro_use] extern crate data_encoding_macro;
 
 extern crate nanopow_rs;
 
