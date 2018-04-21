@@ -55,6 +55,21 @@ error_chain!{
             description("Invalid magic number")
             display("Invalid magic number")
         }
+
+		SeedLengthError(len: usize) {
+			description("Invalid Seed Length")
+			display("Invalid Seed Length! Expected 64 Got {}", len)
+		}
+
+		InvalidAddress {
+			description("Invalid Address")
+			display("Invalid Address")
+		}
+
+		InvalidAddressLength(len: usize) {
+			description("Invalid Address Length")
+			display("Invalid Address Length! Expected 64 Got {}", len)
+		}
     }
 
     links {
@@ -62,6 +77,7 @@ error_chain!{
     }
 
     foreign_links {
+		DecodeError(::data_encoding::DecodeError);
         FormatError(::std::fmt::Error) #[doc = "A formatting error occured"];
         BincodeError(::bincode::Error) #[doc = "An error occurred while serializing/deserializing binary data."];
         IoError(::std::io::Error) #[doc = "An IO error occurred"];
