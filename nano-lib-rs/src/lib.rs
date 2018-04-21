@@ -25,6 +25,10 @@ extern crate data_encoding;
 #[macro_use]
 extern crate data_encoding_macro;
 
+#[cfg(test)]
+#[macro_use]
+extern crate pretty_assertions;
+
 extern crate nanopow_rs;
 
 extern crate tokio_io;
