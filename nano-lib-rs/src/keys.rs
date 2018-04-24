@@ -31,19 +31,39 @@ const XRB_ENCODING: Encoding = new_encoding! {
 
 #[derive(Debug, Clone)]
 pub struct Address(pub String);
-#[derive(Debug, Clone)]
-pub struct Seed(pub String);
+
+#[derive(Clone)]
+pub struct Seed(pub [u8; 64]);
+
 #[derive(Debug)]
 pub struct PrivateKey(SecretKey);
 
 impl Seed {
-	pub fn from_string<T: ToString>(seed: T) -> Result<Self> {
-		let seed = seed.to_string();
+	pub fn from<T: AsRef<[u8]>>(seed: T) -> Result<Self> {
+		let seed = seed.as_ref();
 		if seed.len() != 64 {
 			bail!(ErrorKind::SeedLengthError(seed.len()))
 		}
 
-		Ok(Seed(seed))
+		let seed = HEXUPPER_PERMISSIVE.decode(&seed).unwrap();
+
+		let mut seed_bytes = [0u8; 64];
+		seed_bytes.copy_from_slice(&seed);
+
+		Ok(Seed(seed_bytes))
+	}
+}
+
+impl Deref for Seed {
+	type Target = [u8; 64];
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl DerefMut for Seed {
+	fn deref_mut(&mut self) -> &mut [u8; 64] {
+		&mut self.0
 	}
 }
 
@@ -142,11 +162,10 @@ impl DerefMut for PrivateKey {
 
 impl PrivateKey {
 	pub fn from_seed(seed: Seed, index: u32) -> PrivateKey {
-		let seed_bytes = HEXUPPER_PERMISSIVE.decode(seed.0.as_bytes()).unwrap();
 		let mut blake = Blake2b::new(32).unwrap();
 		let mut index_buf = Vec::with_capacity(4);
 		index_buf.write_u32::<BigEndian>(index).unwrap();
-		blake.process(&seed_bytes);
+		blake.process(&*seed);
 		blake.process(&index_buf);
 
 		let mut buf = [0u8; 32];
