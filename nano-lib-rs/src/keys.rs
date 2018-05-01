@@ -4,17 +4,16 @@ use blake2::{
     Blake2b
 };
 use byteorder::{BigEndian, WriteBytesExt};
-use data_encoding::{Encoding, HEXUPPER_PERMISSIVE, HEXLOWER_PERMISSIVE};
+use data_encoding::{Encoding, HEXUPPER};
 pub use ed25519_dalek::{
 	Keypair,
 	PublicKey,
 	SecretKey,
 	Signature,
 	PUBLIC_KEY_LENGTH,
-    SECRET_KEY_LENGTH,
+  SECRET_KEY_LENGTH,
 	SIGNATURE_LENGTH
 };
-use nanopow_rs::InputHash;
 use error::*;
 use std::ops::{Deref, DerefMut};
 
@@ -33,7 +32,7 @@ const XRB_ENCODING: Encoding = new_encoding! {
 pub struct Address(pub String);
 
 #[derive(Clone)]
-pub struct Seed(pub [u8; 64]);
+pub struct Seed(pub [u8; 32]);
 
 #[derive(Debug)]
 pub struct PrivateKey(SecretKey);
@@ -45,9 +44,9 @@ impl Seed {
 			bail!(ErrorKind::SeedLengthError(seed.len()))
 		}
 
-		let seed = HEXUPPER_PERMISSIVE.decode(&seed).unwrap();
+		let seed = HEXUPPER.decode(&seed).unwrap();
 
-		let mut seed_bytes = [0u8; 64];
+		let mut seed_bytes = [0u8; 32];
 		seed_bytes.copy_from_slice(&seed);
 
 		Ok(Seed(seed_bytes))
@@ -55,14 +54,14 @@ impl Seed {
 }
 
 impl Deref for Seed {
-	type Target = [u8; 64];
+	type Target = [u8; 32];
 	fn deref(&self) -> &Self::Target {
 		&self.0
 	}
 }
 
 impl DerefMut for Seed {
-	fn deref_mut(&mut self) -> &mut [u8; 64] {
+	fn deref_mut(&mut self) -> &mut [u8; 32] {
 		&mut self.0
 	}
 }
@@ -75,11 +74,12 @@ impl Address {
 				encoded_addr.insert_str(0, "1111");
 				let checksum = self.0.get(56..).unwrap();
 				let pkey_bytes = XRB_ENCODING.decode(encoded_addr.as_bytes())?;
-				let derived_checksum = XRB_ENCODING.encode(&compute_address_checksum(&pkey_bytes[3..]));
+				let derived_checksum =
+					XRB_ENCODING.encode(&compute_address_checksum(&pkey_bytes[3..]));
 				if checksum != derived_checksum {
 					bail!(ErrorKind::InvalidAddress)
 				}
-				return Ok(PublicKey::from_bytes(&pkey_bytes[3..])?)
+				return Ok(PublicKey::from_bytes(&pkey_bytes[3..])?);
 			}
 			bail!(ErrorKind::InvalidAddressLength(self.0.len()));
 		}
@@ -158,7 +158,7 @@ impl DerefMut for PrivateKey {
 	fn deref_mut(&mut self) -> &mut SecretKey {
 		&mut self.0
 	}
-}	
+}
 
 impl PrivateKey {
 	pub fn from_seed(seed: Seed, index: u32) -> PrivateKey {
@@ -180,7 +180,7 @@ mod tests {
 
 	#[test]
 	fn can_generate_address_from_seed() {
-		let seed = Seed::from_string("1234567890123456789012345678901234567890123456789012345678901234").unwrap();
+		let seed = Seed::from("1234567890123456789012345678901234567890123456789012345678901234").unwrap();
 
 		// shamelessly copied from https://github.com/frankh/nano/blob/078a99b8e75bd239e13565312e06258164a781d5/address/address_test.go#L55-L59
 		let expected_output = vec![
@@ -191,21 +191,28 @@ mod tests {
 			"xrb_3h9a64yqueuij1j9odt119r3ymm8n83wyyz7o9u7ram1tgfhsh1zqwjtzid9",
 		];
 
-		expected_output.into_iter().enumerate().for_each(|(index, address)| {
-			let priv_key = PrivateKey::from_seed(seed.clone(), index as u32);
-			let account: Account = priv_key.into();
+		expected_output
+			.into_iter()
+			.enumerate()
+			.for_each(|(index, address)| {
+				let priv_key = PrivateKey::from_seed(seed.clone(), index as u32);
+				let account: Account = priv_key.into();
 
-			assert_eq!(account.address.0, address)
-		})
+				assert_eq!(account.address.0, address)
+			})
 	}
 
 	#[test]
 	fn can_convert_address_to_public_key() {
-		let addr = Address("xrb_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3".into());
+		let addr =
+			Address("xrb_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3".into());
 		let public_key = addr.to_public_key().unwrap();
-		let p_key_str = HEXLOWER_PERMISSIVE.encode(public_key.as_bytes());
+		let p_key_str = HEXUPPER.encode(public_key.as_bytes());
 		// shamelessly copied from https://github.com/frankh/nano/blob/078a99b8e75bd239e13565312e06258164a781d5/address/address_test.go#L28-L30
-		assert_eq!(p_key_str, "e89208dd038fbb269987689621d52292ae9c35941a7484756ecced92a65093ba")
+		assert_eq!(
+			p_key_str,
+			"e89208dd038fbb269987689621d52292ae9c35941a7484756ecced92a65093ba".to_uppercase()
+		)
 	}
 
 	#[test]
@@ -216,11 +223,13 @@ mod tests {
 			"xrb_3arg3asgtigae3xckabaaewkx3bzsh7nwz7jkmjos79ihyaxwphhm6qgjps4",
 			"xrb_3pczxuorp48td8645bs3m6c3xotxd3idskrenmi65rbrga5zmkemzhwkaznh",
 			"xrb_3hd4ezdgsp15iemx7h81in7xz5tpxi43b6b41zn3qmwiuypankocw3awes5k",
-			"xrb_1anrzcuwe64rwxzcco8dkhpyxpi8kd7zsjc1oeimpc3ppca4mrjtwnqposrs"
+			"xrb_1anrzcuwe64rwxzcco8dkhpyxpi8kd7zsjc1oeimpc3ppca4mrjtwnqposrs",
 		];
 
 		addresses.into_iter().for_each(|addr| {
-			Address(addr.into()).to_public_key().expect("Couldn't Validate Address");
+			Address(addr.into())
+				.to_public_key()
+				.expect("Couldn't Validate Address");
 		})
 	}
 
@@ -234,9 +243,10 @@ mod tests {
 			"xrb_8nm8t5rimw6h6j7wyokbs8jiygzs7baoha4pqzhfw1k79npyr1km8w6y7r8",
 		];
 
-		let output = addresses.into_iter().map(|addr| {
-			Address(addr.into()).to_public_key().is_err()
-		}).collect::<Vec<_>>();
+		let output = addresses
+			.into_iter()
+			.map(|addr| Address(addr.into()).to_public_key().is_err())
+			.collect::<Vec<_>>();
 
 		assert_eq!(output, vec![true, true, true, true, true])
 	}
